@@ -1,4 +1,5 @@
-import { authenticate, httpError } from './auth.js';
+import { authenticate, httpError, readToken } from './auth.js';
+import { catatLaju } from './redis.js';
 
 const routes = [];
 
@@ -35,6 +36,26 @@ function send(res, status, obj) {
   res.end(body);
 }
 
+// batas umum: per akun yang masuk (siswa satu sekolah sering berbagi satu IP) dan per IP untuk akses tanpa login
+const RL_USER = Number(process.env.RL_USER || 240);   // permintaan / menit / akun
+const RL_IP = Number(process.env.RL_IP || 120);       // permintaan / menit / IP untuk API publik
+
+const ipDari = (req) => (process.env.TRUST_PROXY === '0' ? null : req.headers['x-forwarded-for']?.split(',')[0].trim()) || req.socket.remoteAddress;
+
+async function batasUmum(req, res, r, ip, url) {
+  const h = req.headers.authorization || '';
+  const tok = readToken(h.startsWith('Bearer ') ? h.slice(7) : r.opts.raw ? url.searchParams.get('token') : '');
+  const kunci = tok ? `u:${tok.uid}` : `ip:${ip}`;
+  const maks = tok ? RL_USER : RL_IP;
+  const x = await catatLaju(kunci, maks, 60);
+  res.setHeader('X-RateLimit-Limit', maks);
+  res.setHeader('X-RateLimit-Remaining', x.sisa);
+  if (!x.izin) {
+    res.setHeader('Retry-After', x.ulangDalam);
+    throw httpError(429, `Terlalu banyak permintaan. Tunggu ${x.ulangDalam} detik lalu coba lagi.`);
+  }
+}
+
 export async function handleApi(req, res, url) {
   const path = url.pathname.replace(/\/+$/, '');
   let methodMatched = false;
@@ -50,9 +71,10 @@ export async function handleApi(req, res, url) {
         params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])),
         query: Object.fromEntries(url.searchParams),
         body: !r.opts.bodyRaw && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) ? await readBody(req, r.opts.limit) : {},
-        ip: req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress,
+        ip: ipDari(req),
       };
-      if (!r.opts.public) Object.assign(ctx, authenticate(req, r.opts.raw ? ctx.query.token : undefined));
+      if (!r.opts.noLimit) await batasUmum(req, res, r, ctx.ip, url);
+      if (!r.opts.public) Object.assign(ctx, await authenticate(req, r.opts.raw ? ctx.query.token : undefined));
       if (r.opts.raw) { await r.handler(ctx, res); return; } // handler menulis respons sendiri (mis. SSE, unduhan)
       const data = await r.handler(ctx);
       return send(res, 200, { ok: true, data: data ?? null });

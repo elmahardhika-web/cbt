@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { all, one, run, tx, setting, setSetting } from './db.js';
+import { all, one, run, tx, insertId, setting, setSetting } from './db.js';
 import { hashPassword, DEFAULT_PASSWORD } from './auth.js';
 import { genToken, finalize } from './util.js';
 import { score, isManual } from './scoring.js';
@@ -16,51 +16,53 @@ function namaWilayah(kodeKab) {
   return { provinsi_kode: p?.kode, provinsi: p?.nama, kabkota_kode: k?.kode, kabkota: k?.nama };
 }
 
-function tambahSekolah(npsn, nama, kodeKab, kecamatan, kelurahan, extra = {}) {
+async function tambahSekolah(npsn, nama, kodeKab, kecamatan, kelurahan, extra = {}) {
   const w = namaWilayah(kodeKab);
-  run(`INSERT INTO sekolah (npsn, nama, provinsi_kode, provinsi, kabkota_kode, kabkota, kecamatan, kelurahan, alamat, kepala_sekolah, nip_kepsek, is_demo)
+  await run(`INSERT INTO sekolah (npsn, nama, provinsi_kode, provinsi, kabkota_kode, kabkota, kecamatan, kelurahan, alamat, kepala_sekolah, nip_kepsek, is_demo)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, npsn, nama, w.provinsi_kode, w.provinsi, w.kabkota_kode, w.kabkota, kecamatan, kelurahan,
     extra.alamat || null, extra.kepala_sekolah || null, extra.nip_kepsek || null, extra.is_demo ? 1 : 0);
-  run(`INSERT OR IGNORE INTO wilayah_lokal (kabkota_kode, kecamatan, kelurahan) VALUES (?, ?, '')`, w.kabkota_kode, kecamatan);
-  run(`INSERT OR IGNORE INTO wilayah_lokal (kabkota_kode, kecamatan, kelurahan) VALUES (?, ?, ?)`, w.kabkota_kode, kecamatan, kelurahan);
+  await run(`INSERT INTO wilayah_lokal (kabkota_kode, kecamatan, kelurahan) VALUES (?, ?, '') ON CONFLICT DO NOTHING`, w.kabkota_kode, kecamatan);
+  await run(`INSERT INTO wilayah_lokal (kabkota_kode, kecamatan, kelurahan) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, w.kabkota_kode, kecamatan, kelurahan);
 }
 
-function tambahPengguna(username, peran, nama, extra = {}, hash = null) {
+async function tambahPengguna(username, peran, nama, extra = {}, hash = null) {
   const pw = extra.password || DEFAULT_PASSWORD;
-  const r = run(`INSERT INTO pengguna (username, password_hash, password_awal, peran, nama, npsn, kelas, sesi, jk, bisa_monitor)
+  return insertId(`INSERT INTO pengguna (username, password_hash, password_awal, peran, nama, npsn, kelas, sesi, jk, bisa_monitor)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, username, hash || hashPassword(pw), peran === 'siswa' ? pw : null, peran, nama,
     extra.npsn || null, extra.kelas || null, extra.sesi || null, extra.jk || null, extra.bisa_monitor ? 1 : 0);
-  return Number(r.lastInsertRowid);
 }
 
 /** Data awal saat database masih kosong. */
-export function seedAwal() {
-  if (!setting('verif_secret')) setSetting('verif_secret', crypto.randomBytes(24).toString('hex'));
-  if (one('SELECT 1 FROM pengguna LIMIT 1')) return false;
-  tx(() => {
-    setSetting('nama_aplikasi', 'TKA SD 2026');
-    setSetting('nama_instansi', '[Nama Instansi]');
-    setSetting('tahun_ajaran', '2025/2026');
-    setSetting('target_capaian', 70);
-    setSetting('helpdesk', []);
-    setSetting('dokumen', []);
+export async function seedAwal() {
+  if (!setting('verif_secret')) await setSetting('verif_secret', crypto.randomBytes(24).toString('hex'));
+  if (await one('SELECT 1 FROM pengguna LIMIT 1')) return false;
+  await tx(async () => {
+    await run('SELECT pg_advisory_xact_lock(20262028)');
+    if (await one('SELECT 1 FROM pengguna LIMIT 1')) return; // instans lain sudah mengisi
+    await setSetting('nama_aplikasi', 'TKA SD 2026');
+    await setSetting('nama_instansi', '[Nama Instansi]');
+    await setSetting('tahun_ajaran', '2025/2026');
+    await setSetting('target_capaian', 70);
+    await setSetting('helpdesk', []);
+    await setSetting('dokumen', []);
 
-    [['BI', 'Bahasa Indonesia', 1], ['MAT', 'Matematika', 2]].forEach(([k, n, u]) => run('INSERT INTO mapel (kode, nama, urutan) VALUES (?, ?, ?)', k, n, u));
-    [['TO1', 'Try Out 1'], ['TO2', 'Try Out 2'], ['TO3', 'Try Out 3'], ['US', 'Ujian Sekolah'], ['UKK', 'Ujian Kenaikan Kelas'], ['SUM', 'Sumatif Akhir Tahun']]
-      .forEach(([k, n], i) => run('INSERT INTO kategori (kode, nama, urutan) VALUES (?, ?, ?)', k, n, i + 1));
+    for (const [k, n, u] of [['BI', 'Bahasa Indonesia', 1], ['MAT', 'Matematika', 2]]) await run('INSERT INTO mapel (kode, nama, urutan) VALUES (?, ?, ?)', k, n, u);
+    for (const [i, [k, n]] of [['TO1', 'Try Out 1'], ['TO2', 'Try Out 2'], ['TO3', 'Try Out 3'], ['US', 'Ujian Sekolah'], ['UKK', 'Ujian Kenaikan Kelas'], ['SUM', 'Sumatif Akhir Tahun']].entries()) {
+      await run('INSERT INTO kategori (kode, nama, urutan) VALUES (?, ?, ?)', k, n, i + 1);
+    }
 
     // master kosong: hanya akun superadmin; sekolah, pengguna lain, dan jadwal ujian diisi sendiri lewat aplikasi
-    const superadmin = tambahPengguna('superadmin', 'superadmin', 'Superadmin', { password: SUPERADMIN_PASSWORD });
+    const superadmin = await tambahPengguna('superadmin', 'superadmin', 'Superadmin', { password: SUPERADMIN_PASSWORD });
 
     // bank soal awal (opsional): berkas JSON yang ditaruh di folder seed/ diimpor saat database pertama kali dibuat
     for (const f of fs.readdirSync(path.join(ROOT, 'seed')).filter((x) => x.endsWith('.json'))) {
       const list = JSON.parse(fs.readFileSync(path.join(ROOT, 'seed', f), 'utf8'));
-      list.forEach((x, i) => {
+      for (const [i, x] of list.entries()) {
         const pj = (v) => { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return v; } };
-        run(`INSERT INTO soal (penulis_id, mapel, kategori, tipe, pertanyaan, opsi, kunci, skor_maks, nomor, aktif, status, ditelaah_at)
+        await run(`INSERT INTO soal (penulis_id, mapel, kategori, tipe, pertanyaan, opsi, kunci, skor_maks, nomor, aktif, status, ditelaah_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'disetujui', ?)`, superadmin, x.mapel, x.kategori, x.tipe_soal, x.konten_pertanyaan,
           JSON.stringify(pj(x.opsi_jawaban)), JSON.stringify(pj(x.kunci_jawaban)), x.skor_maksimum || 1, i + 1, Date.now());
-      });
+      }
     }
 
   });
@@ -95,79 +97,81 @@ function demoAcak(seed) {
 }
 
 /** Soal paket demo: pakai soal kategori itu, atau soal TO1 mapel yang sama bila belum ada. */
-function soalDemo(m, k, gauss) {
-  let list = all(`SELECT * FROM soal WHERE mapel = ? AND kategori = ? AND status = 'disetujui' AND aktif = 1 ORDER BY nomor, id`, m, k);
-  if (!list.length) list = all(`SELECT * FROM soal WHERE mapel = ? AND status = 'disetujui' AND aktif = 1 ORDER BY kategori, nomor, id LIMIT 30`, m);
+async function soalDemo(m, k, gauss) {
+  let list = await all(`SELECT * FROM soal WHERE mapel = ? AND kategori = ? AND status = 'disetujui' AND aktif = 1 ORDER BY nomor, id`, m, k);
+  if (!list.length) list = await all(`SELECT * FROM soal WHERE mapel = ? AND status = 'disetujui' AND aktif = 1 ORDER BY kategori, nomor, id LIMIT 30`, m);
   return list.map((x) => ({ ...x, opsi: JSON.parse(x.opsi), kunci: JSON.parse(x.kunci), b: gauss() * 0.9 }));
 }
 
 /** Satu jadwal ujian demo beserta jawaban simulasi seluruh siswa sekolah itu. */
-function isiUjianDemo(npsn, siswa, m, k, naik, soal, { rand, gauss }) {
-  const ujianId = Number(run(`INSERT INTO ujian (npsn, mapel, kategori, durasi, sesi, kelas, aktif, token, tanggal) VALUES (?, ?, ?, 60, 'SEMUA', 'SEMUA', 0, ?, '2026-10-05')`,
-    npsn, m, k, genToken()).lastInsertRowid);
+async function isiUjianDemo(npsn, siswa, m, k, naik, soal, { rand, gauss }) {
+  const ujianId = await insertId(`INSERT INTO ujian (npsn, mapel, kategori, durasi, sesi, kelas, aktif, token, tanggal) VALUES (?, ?, ?, 60, 'SEMUA', 'SEMUA', 0, ?, '2026-10-05')`,
+    npsn, m, k, genToken());
   for (const s of siswa) {
-    if (rand() < 0.04) { run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status) VALUES (?, ?, 'absen')`, ujianId, s.id); continue; }
+    if (rand() < 0.04) { await run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status) VALUES (?, ?, 'absen')`, ujianId, s.id); continue; }
     const theta = s.theta + naik + (naik ? gauss() * 0.3 : 0);
     const mulai = Date.parse(JAM_DEMO[k] || JAM_DEMO.TO1) + Math.floor(rand() * 600e3);
-    const pid = Number(run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status, urutan, mulai_at, durasi_ms, terpakai_ms, last_active, keluar_layar)
-      VALUES (?, ?, 'mengerjakan', ?, ?, ?, ?, ?, ?)`, ujianId, s.id, JSON.stringify(soal.map((x) => x.id)), mulai, 3600e3, 2400e3, mulai + 2400e3, rand() < 0.05 ? 1 : 0).lastInsertRowid);
+    const pid = await insertId(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status, urutan, mulai_at, durasi_ms, terpakai_ms, last_active, keluar_layar)
+      VALUES (?, ?, 'mengerjakan', ?, ?, ?, ?, ?, ?)`, ujianId, s.id, JSON.stringify(soal.map((x) => x.id)), mulai, 3600e3, 2400e3, mulai + 2400e3, rand() < 0.05 ? 1 : 0);
     for (const so of soal) {
       const benar = rand() < 1 / (1 + Math.exp(-1.3 * (theta - so.b)));
       const j = jawabanSimulasi(so, benar, rand);
       const sk = isManual(so) ? null : score(so, j);
-      run(`INSERT INTO jawaban (peserta_id, soal_id, jawaban, skor) VALUES (?, ?, ?, ?)`, pid, so.id, JSON.stringify(j), sk);
+      await run(`INSERT INTO jawaban (peserta_id, soal_id, jawaban, skor) VALUES (?, ?, ?, ?)`, pid, so.id, JSON.stringify(j), sk);
     }
-    finalize(pid, 'siswa');
-    run('UPDATE peserta_ujian SET selesai_at = ? WHERE id = ?', mulai + 2400e3 + Math.floor(rand() * 900e3), pid);
+    await finalize(pid, 'siswa');
+    await run('UPDATE peserta_ujian SET selesai_at = ? WHERE id = ?', mulai + 2400e3 + Math.floor(rand() * 900e3), pid);
   }
 }
 
-export function buatDataDemo() {
-  if (one('SELECT 1 FROM sekolah WHERE is_demo = 1')) return { dibuat: false, pesan: 'Data demo sudah ada.' };
+export async function buatDataDemo() {
+  if (await one('SELECT 1 FROM sekolah WHERE is_demo = 1')) return { dibuat: false, pesan: 'Data demo sudah ada.' };
   const acak = demoAcak(20261005);
   const { rand, gauss } = acak;
-  const soalPaket = Object.fromEntries(PAKET_DEMO.map(([m, k]) => [`${m}${k}`, soalDemo(m, k, gauss)]));
+  const soalPaket = {};
+  for (const [m, k] of PAKET_DEMO) soalPaket[`${m}${k}`] = await soalDemo(m, k, gauss);
   const hash = hashPassword(DEFAULT_PASSWORD);
   let nSiswa = 0;
-  tx(() => {
+  await tx(async () => {
     for (const [npsn, nama, kab, kec, kel, mutu] of DEMO_SEKOLAH) {
-      tambahSekolah(npsn, nama, kab, kec, kel, { is_demo: 1, kepala_sekolah: '[Nama Kepala Sekolah]' });
-      tambahPengguna(`admin${npsn.slice(-2)}`, 'admin', `Admin ${nama}`, { npsn }, hash);
+      await tambahSekolah(npsn, nama, kab, kec, kel, { is_demo: 1, kepala_sekolah: '[Nama Kepala Sekolah]' });
+      await tambahPengguna(`admin${npsn.slice(-2)}`, 'admin', `Admin ${nama}`, { npsn }, hash);
       const siswa = [];
       for (const kelas of ['6A', '6B']) {
         const jumlah = 14 + Math.floor(rand() * 6);
         for (let i = 0; i < jumlah; i++) {
           const nm = `${NAMA_DEPAN[Math.floor(rand() * NAMA_DEPAN.length)]} ${NAMA_BELAKANG[Math.floor(rand() * NAMA_BELAKANG.length)]}`;
-          const id = tambahPengguna(`${npsn.slice(-2)}${kelas}${String(i + 1).padStart(2, '0')}`.toLowerCase(), 'siswa', nm,
+          const id = await tambahPengguna(`${npsn.slice(-2)}${kelas}${String(i + 1).padStart(2, '0')}`.toLowerCase(), 'siswa', nm,
             { npsn, kelas, sesi: i % 2 ? 'Sesi 2' : 'Sesi 1', jk: rand() < 0.5 ? 'L' : 'P' }, hash);
           siswa.push({ id, theta: mutu + gauss() });
           nSiswa++;
         }
       }
-      for (const [m, k, naik] of PAKET_DEMO) isiUjianDemo(npsn, siswa, m, k, naik, soalPaket[`${m}${k}`], acak);
+      for (const [m, k, naik] of PAKET_DEMO) await isiUjianDemo(npsn, siswa, m, k, naik, soalPaket[`${m}${k}`], acak);
     }
   });
   return { dibuat: true, sekolah: DEMO_SEKOLAH.length, siswa: nSiswa };
 }
 
 /** Database lama berisi demo TO1 saja: tambahkan TO2 & TO3 agar rekap try out bisa dicoba. */
-export function lengkapiTryoutDemo() {
-  const sekolah = all('SELECT npsn FROM sekolah WHERE is_demo = 1');
+export async function lengkapiTryoutDemo() {
+  const sekolah = await all('SELECT npsn FROM sekolah WHERE is_demo = 1');
   if (!sekolah.length) return 0;
   const acak = demoAcak(20261006);
   const mutu = Object.fromEntries(DEMO_SEKOLAH.map((d) => [d[0], d[5]]));
   let n = 0;
-  tx(() => {
+  await tx(async () => {
     for (const { npsn } of sekolah) {
-      const kurang = PAKET_DEMO.filter(([m, k]) => !one('SELECT 1 FROM ujian WHERE npsn = ? AND mapel = ? AND kategori = ?', npsn, m, k));
+      const kurang = [];
+      for (const pk of PAKET_DEMO) if (!(await one('SELECT 1 FROM ujian WHERE npsn = ? AND mapel = ? AND kategori = ?', npsn, pk[0], pk[1]))) kurang.push(pk);
       if (!kurang.length) continue;
       // perkiraan kemampuan dari nilai yang sudah ada, agar perkembangannya masuk akal
-      const siswa = all(`SELECT p.id, AVG(pu.nilai) AS nilai FROM pengguna p LEFT JOIN peserta_ujian pu ON pu.siswa_id = p.id AND pu.status = 'selesai'
-        WHERE p.npsn = ? AND p.peran = 'siswa' GROUP BY p.id`, npsn).map((s) => {
+      const siswa = (await all(`SELECT p.id, AVG(pu.nilai) AS nilai FROM pengguna p LEFT JOIN peserta_ujian pu ON pu.siswa_id = p.id AND pu.status = 'selesai'
+        WHERE p.npsn = ? AND p.peran = 'siswa' GROUP BY p.id`, npsn)).map((s) => {
         const pr = Math.min(0.97, Math.max(0.03, (s.nilai ?? 50) / 100));
         return { id: s.id, theta: s.nilai == null ? (mutu[npsn] || 0) + acak.gauss() : Math.log(pr / (1 - pr)) / 1.3 + acak.gauss() * 0.2 };
       });
-      for (const [m, k, naik] of kurang) { isiUjianDemo(npsn, siswa, m, k, naik, soalDemo(m, k, acak.gauss), acak); n++; }
+      for (const [m, k, naik] of kurang) { await isiUjianDemo(npsn, siswa, m, k, naik, await soalDemo(m, k, acak.gauss), acak); n++; }
     }
   });
   return n;
@@ -194,8 +198,8 @@ function jawabanSimulasi(s, benar, rand) {
   }
 }
 
-export function hapusDataDemo() {
-  const n = one('SELECT COUNT(*) n FROM sekolah WHERE is_demo = 1').n;
-  run('DELETE FROM sekolah WHERE is_demo = 1');
+export async function hapusDataDemo() {
+  const n = (await one('SELECT COUNT(*) n FROM sekolah WHERE is_demo = 1')).n;
+  await run('DELETE FROM sekolah WHERE is_demo = 1');
   return { dihapus: n };
 }

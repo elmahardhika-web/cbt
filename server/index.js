@@ -2,7 +2,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import './log.js';
-import { DATA_DIR } from './db.js';
+import { DATA_DIR, siapkanSkema, muatPengaturan, saatPengaturanBerubah, pool } from './db.js';
+import { dengarkan, siarkan, tutupRedis } from './redis.js';
 import { handleApi } from './router.js';
 import { seedAwal, buatDataDemo, lengkapiTryoutDemo } from './seed.js';
 import { sweepExpired, nilaiUlangKategori } from './util.js';
@@ -13,27 +14,52 @@ import './api-ujian.js';
 import './api-laporan.js';
 import './api-massal.js';
 import './api-pengajuan.js';
-import { cadanganOtomatis } from './backup.js';
+import { cadanganOtomatis, migrasiDariSqlite } from './backup.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = path.join(import.meta.dirname, '..', 'public');
 const UPLOADS = path.join(DATA_DIR, 'uploads');
 
-if (seedAwal()) {
-  console.log('Database baru dibuat dengan akun bawaan.');
-  if (process.env.SEED_DEMO === '1') console.log('Data demo:', buatDataDemo());
-} else if (process.env.SEED_DEMO === '1') {
-  try { const n = lengkapiTryoutDemo(); if (n) console.log(`Data demo: ${n} jadwal try out ditambahkan`); } catch (e) { console.error('Gagal melengkapi data demo:', e); }
+// tunggu PostgreSQL siap (container database bisa menyala belakangan)
+for (let i = 1; ; i++) {
+  try { await pool.query('SELECT 1'); break; } catch (e) {
+    if (i >= 30) { console.error('PostgreSQL tidak bisa dihubungi:', e.message); process.exit(1); }
+    console.log(`Menunggu PostgreSQL… (${e.message})`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
 }
-try { const n = nilaiUlangKategori(); if (n) console.log(`Skor soal kategori dinilai ulang: ${n} peserta`); } catch (e) { console.error('Gagal menilai ulang soal kategori:', e); }
+await siapkanSkema();
 
-setInterval(() => {
-  try { const n = sweepExpired(notify); if (n) console.log(`${n} ujian dikumpulkan otomatis (waktu/jam sesi habis)`); } catch (e) { console.error(e); }
+// pengaturan disimpan di memori tiap instans; perubahan di satu instans disiarkan ke yang lain
+saatPengaturanBerubah(() => siarkan('pengaturan', 'muat'));
+dengarkan('pengaturan', () => muatPengaturan().catch((e) => console.error('Gagal memuat pengaturan:', e)));
+
+try {
+  const m = await migrasiDariSqlite();
+  if (m) console.log('Migrasi data lama selesai:', JSON.stringify(m.tabel), `${m.berkas} berkas`);
+} catch (e) { console.error('Migrasi dari SQLite gagal:', e); }
+
+if (await seedAwal()) {
+  console.log('Database baru dibuat dengan akun bawaan.');
+  if (process.env.SEED_DEMO === '1') console.log('Data demo:', await buatDataDemo());
+} else if (process.env.SEED_DEMO === '1') {
+  try { const n = await lengkapiTryoutDemo(); if (n) console.log(`Data demo: ${n} jadwal try out ditambahkan`); } catch (e) { console.error('Gagal melengkapi data demo:', e); }
+}
+try { const n = await nilaiUlangKategori(); if (n) console.log(`Skor soal kategori dinilai ulang: ${n} peserta`); } catch (e) { console.error('Gagal menilai ulang soal kategori:', e); }
+
+let menyapu = false;
+setInterval(async () => {
+  if (menyapu) return;
+  menyapu = true;
+  try { const n = await sweepExpired(notify); if (n) console.log(`${n} ujian dikumpulkan otomatis (waktu/jam sesi habis)`); } catch (e) { console.error(e); } finally { menyapu = false; }
 }, 10e3);
 
-// cadangan otomatis harian (diperiksa tiap jam, dibuat sekali sehari)
-setTimeout(() => { try { cadanganOtomatis(); } catch (e) { console.error('Cadangan otomatis gagal:', e); } }, 60e3);
-setInterval(() => { try { cadanganOtomatis(); } catch (e) { console.error('Cadangan otomatis gagal:', e); } }, 3600e3);
+// cadangan otomatis harian (diperiksa tiap jam, dibuat sekali sehari); BACKUP_OTOMATIS=0 mematikannya
+const cadangan = () => cadanganOtomatis().catch((e) => console.error('Cadangan otomatis gagal:', e));
+if (process.env.BACKUP_OTOMATIS !== '0') {
+  setTimeout(cadangan, 60e3);
+  setInterval(cadangan, 3600e3);
+}
 
 // pembaruan aplikasi: berkas data/.muat-ulang memicu restart (Docker menyalakan kembali dengan kode terbaru)
 setInterval(() => {
@@ -81,3 +107,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => console.log(`TKA 2026 berjalan di http://localhost:${PORT} (data: ${DATA_DIR})`));
+
+// berhenti dengan rapi saat container dihentikan
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    console.log(`Menerima ${sig}, menutup koneksi…`);
+    server.close();
+    setTimeout(async () => { await pool.end().catch(() => {}); await tutupRedis(); process.exit(0); }, 500);
+  });
+}

@@ -1,4 +1,7 @@
 // Siaran perubahan ke layar monitor (Server-Sent Events), per sekolah.
+// Perubahan disiarkan lewat Redis agar monitor yang terhubung ke instans lain ikut diperbarui.
+import { dengarkan, siarkan } from './redis.js';
+
 const subs = new Map(); // npsn -> Set<res>
 const dirty = new Set();
 
@@ -8,10 +11,21 @@ export function subscribe(npsn, res) {
   return () => subs.get(npsn)?.delete(res);
 }
 
+// npsn null = monitor pusat (semua sekolah)
+dengarkan('monitor', (npsn) => {
+  if (subs.has(npsn)) dirty.add(npsn);
+  if (subs.has(null)) dirty.add(null);
+});
+
 /** Tandai ada perubahan; dikirim bertahap tiap detik agar tidak membanjiri. */
+const tertunda = new Set();
 export function notify(npsn) {
-  if (npsn && subs.has(npsn)) dirty.add(npsn);
+  if (npsn) tertunda.add(npsn);
 }
+setInterval(() => {
+  for (const npsn of tertunda) siarkan('monitor', npsn);
+  tertunda.clear();
+}, 500);
 
 function kirim(npsn, event) {
   for (const res of subs.get(npsn) || []) {

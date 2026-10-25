@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { route } from './router.js';
-import { all, one, run, tx } from './db.js';
+import { all, one, run, tx, insertId } from './db.js';
 import { httpError, requireRole } from './auth.js';
 import { int, str, parseJSON, parseSoal, scopeNpsn, assertSekolahAccess, genToken, now, paketInfo, sasaranUjian, finalize, recompute, sisaWaktu, batasJam, jeda, lanjut, audit } from './util.js';
 import { subscribe, notify } from './events.js';
@@ -8,8 +8,11 @@ import { score, isManual, isAnswered, isLengkap, butirWajib } from './scoring.js
 
 const ONLINE_MS = 45e3;
 
-function ambilUjian(ctx, id) {
-  const u = one(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah_nama
+/** Tanggal hari ini (zona waktu server) dalam format YYYY-MM-DD. */
+const hariIni = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+async function ambilUjian(ctx, id) {
+  const u = await one(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah_nama
     FROM ujian uj JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori JOIN sekolah s ON s.npsn = uj.npsn WHERE uj.id = ?`, id);
   if (!u) throw httpError(404, 'Ujian tidak ditemukan.');
   assertSekolahAccess(ctx, u.npsn);
@@ -27,23 +30,26 @@ function bolehMonitor(ctx) {
 }
 
 // ---------- jadwal ujian (admin sekolah) ----------
-route('GET', '/api/ujian', (ctx) => {
-  requireRole(ctx, 'admin', 'superadmin', 'guru', 'supervisor');
+route('GET', '/api/ujian', async (ctx) => {
+  requireRole(ctx, 'admin', 'superadmin', 'guru');
   const npsn = scopeNpsn(ctx, ctx.query.npsn);
-  const items = all(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah_nama, um.nama AS massal_nama,
+  const items = await all(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah_nama, um.nama AS massal_nama,
       (SELECT COUNT(*) FROM peserta_ujian pu WHERE pu.ujian_id = uj.id AND pu.status = 'selesai') AS selesai,
       (SELECT COUNT(*) FROM peserta_ujian pu WHERE pu.ujian_id = uj.id AND pu.status = 'mengerjakan') AS mengerjakan
     FROM ujian uj JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori JOIN sekolah s ON s.npsn = uj.npsn
     LEFT JOIN ujian_massal um ON um.id = uj.massal_id
-    WHERE (? IS NULL OR uj.npsn = ?) ORDER BY uj.aktif DESC, uj.tanggal DESC, uj.jam_mulai, uj.id DESC`, npsn, npsn);
+    WHERE (?::text IS NULL OR uj.npsn = ?) ORDER BY uj.aktif DESC, uj.tanggal DESC NULLS LAST, uj.jam_mulai, uj.id DESC`, npsn, npsn);
+  const paket = new Map();
   for (const u of items) {
-    u.paket = paketInfo(u.mapel, u.kategori);
-    u.sasaran = sasaranUjian(u).length;
+    const k = `${u.mapel}|${u.kategori}`;
+    if (!paket.has(k)) paket.set(k, await paketInfo(u.mapel, u.kategori));
+    u.paket = paket.get(k);
+    u.sasaran = (await sasaranUjian(u)).length;
   }
   return items;
 });
 
-function dataUjian(b, old = {}) {
+async function dataUjian(b, old = {}) {
   const v = (k, d) => (b[k] === undefined ? old[k] ?? d : b[k]);
   const r = {
     mapel: str(v('mapel')), kategori: str(v('kategori')),
@@ -52,82 +58,82 @@ function dataUjian(b, old = {}) {
     tanggal: str(v('tanggal')) || null, jam_mulai: str(v('jam_mulai')) || null, jam_selesai: str(v('jam_selesai')) || null,
     acak: v('acak', 1) ? 1 : 0,
   };
-  if (!one('SELECT 1 FROM mapel WHERE kode = ?', r.mapel)) throw httpError(400, 'Pilih mata pelajaran.');
-  if (!one('SELECT 1 FROM kategori WHERE kode = ?', r.kategori)) throw httpError(400, 'Pilih kategori.');
+  if (!(await one('SELECT 1 FROM mapel WHERE kode = ?', r.mapel))) throw httpError(400, 'Pilih mata pelajaran.');
+  if (!(await one('SELECT 1 FROM kategori WHERE kode = ?', r.kategori))) throw httpError(400, 'Pilih kategori.');
   return r;
 }
 
-route('POST', '/api/ujian', (ctx) => {
+route('POST', '/api/ujian', async (ctx) => {
   requireRole(ctx, 'admin', 'superadmin');
   const npsn = scopeNpsn(ctx, ctx.body.npsn);
-  if (!npsn || !one('SELECT 1 FROM sekolah WHERE npsn = ?', npsn)) throw httpError(400, 'Pilih sekolah.');
-  const r = dataUjian(ctx.body);
-  const info = run(`INSERT INTO ujian (npsn, mapel, kategori, durasi, sesi, kelas, tanggal, jam_mulai, jam_selesai, acak, aktif, token)
+  if (!npsn || !(await one('SELECT 1 FROM sekolah WHERE npsn = ?', npsn))) throw httpError(400, 'Pilih sekolah.');
+  const r = await dataUjian(ctx.body);
+  const id = await insertId(`INSERT INTO ujian (npsn, mapel, kategori, durasi, sesi, kelas, tanggal, jam_mulai, jam_selesai, acak, aktif, token)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`, npsn, r.mapel, r.kategori, r.durasi, r.sesi, r.kelas, r.tanggal, r.jam_mulai, r.jam_selesai, r.acak, genToken());
-  return ambilUjian(ctx, Number(info.lastInsertRowid));
+  return ambilUjian(ctx, id);
 });
 
-route('PUT', '/api/ujian/:id', (ctx) => {
+route('PUT', '/api/ujian/:id', async (ctx) => {
   requireRole(ctx, 'admin', 'superadmin');
-  const old = ambilUjian(ctx, int(ctx.params.id));
+  const old = await ambilUjian(ctx, int(ctx.params.id));
   cekMassal(ctx, old);
-  const r = dataUjian(ctx.body, old);
-  const dipakai = one('SELECT 1 FROM peserta_ujian WHERE ujian_id = ? LIMIT 1', old.id);
+  const r = await dataUjian(ctx.body, old);
+  const dipakai = await one('SELECT 1 FROM peserta_ujian WHERE ujian_id = ? LIMIT 1', old.id);
   if (dipakai && (r.mapel !== old.mapel || r.kategori !== old.kategori)) throw httpError(400, 'Ujian sudah dikerjakan siswa; paket soal tidak bisa diganti.');
-  run(`UPDATE ujian SET mapel = ?, kategori = ?, durasi = ?, sesi = ?, kelas = ?, tanggal = ?, jam_mulai = ?, jam_selesai = ?, acak = ? WHERE id = ?`,
+  await run(`UPDATE ujian SET mapel = ?, kategori = ?, durasi = ?, sesi = ?, kelas = ?, tanggal = ?, jam_mulai = ?, jam_selesai = ?, acak = ? WHERE id = ?`,
     r.mapel, r.kategori, r.durasi, r.sesi, r.kelas, r.tanggal, r.jam_mulai, r.jam_selesai, r.acak, old.id);
   return ambilUjian(ctx, old.id);
 });
 
-route('DELETE', '/api/ujian/:id', (ctx) => {
+route('DELETE', '/api/ujian/:id', async (ctx) => {
   requireRole(ctx, 'admin', 'superadmin');
-  const u = ambilUjian(ctx, int(ctx.params.id));
+  const u = await ambilUjian(ctx, int(ctx.params.id));
   cekMassal(ctx, u);
-  if (one(`SELECT 1 FROM peserta_ujian WHERE ujian_id = ? AND status <> 'absen' LIMIT 1`, u.id) && !ctx.body.paksa) {
+  if (await one(`SELECT 1 FROM peserta_ujian WHERE ujian_id = ? AND status <> 'absen' LIMIT 1`, u.id) && !ctx.body.paksa) {
     throw httpError(400, 'Ujian ini sudah punya hasil. Hapus tetap akan menghapus nilai siswa.');
   }
-  run('DELETE FROM ujian WHERE id = ?', u.id);
+  await run('DELETE FROM ujian WHERE id = ?', u.id);
   return true;
 });
 
-route('PUT', '/api/ujian/:id/aktif', (ctx) => {
+route('PUT', '/api/ujian/:id/aktif', async (ctx) => {
   requireRole(ctx, 'admin', 'superadmin');
-  const u = ambilUjian(ctx, int(ctx.params.id));
+  const u = await ambilUjian(ctx, int(ctx.params.id));
   cekMassal(ctx, u);
   const aktif = ctx.body.aktif ? 1 : 0;
   if (aktif) {
-    const p = paketInfo(u.mapel, u.kategori);
-    if (!p.siap) throw httpError(400, 'Paket soal ini belum punya soal yang disetujui supervisor.');
+    const p = await paketInfo(u.mapel, u.kategori);
+    if (!p.siap) throw httpError(400, 'Paket soal ini belum punya soal yang lolos telaah superadmin.');
     if (p.belum_ditelaah) throw httpError(400, `Masih ada ${p.belum_ditelaah} soal di paket ini yang belum selesai ditelaah.`);
   }
-  run('UPDATE ujian SET aktif = ?, token = COALESCE(token, ?) WHERE id = ?', aktif, genToken(), u.id);
+  await run('UPDATE ujian SET aktif = ?, token = COALESCE(token, ?) WHERE id = ?', aktif, genToken(), u.id);
   notify(u.npsn);
   return ambilUjian(ctx, u.id);
 });
 
-route('POST', '/api/ujian/:id/token', (ctx) => {
+route('POST', '/api/ujian/:id/token', async (ctx) => {
   requireRole(ctx, 'admin', 'superadmin', 'guru');
   if (ctx.user.peran === 'guru') bolehMonitor(ctx);
-  const u = ambilUjian(ctx, int(ctx.params.id));
+  const u = await ambilUjian(ctx, int(ctx.params.id));
   cekMassal(ctx, u);
   const token = genToken();
-  run('UPDATE ujian SET token = ? WHERE id = ?', token, u.id);
+  await run('UPDATE ujian SET token = ? WHERE id = ?', token, u.id);
   return { token };
 });
 
-route('GET', '/api/ujian/:id/monitor', (ctx) => {
+route('GET', '/api/ujian/:id/monitor', async (ctx) => {
   bolehMonitor(ctx);
-  const u = ambilUjian(ctx, int(ctx.params.id));
+  const u = await ambilUjian(ctx, int(ctx.params.id));
   return dataMonitor(ctx, u);
 });
 
 /** Status peserta dihitung dari detak terakhir: online bila ada detak < 45 detik. */
-function dataMonitor(ctx, u) {
-  const siswa = sasaranUjian(u);
-  const ps = new Map(all(`SELECT pu.*, json_array_length(pu.urutan) AS total,
+async function dataMonitor(ctx, u) {
+  const siswa = await sasaranUjian(u);
+  const ps = new Map((await all(`SELECT pu.*, json_array_length(pu.urutan::json) AS total,
       (SELECT COUNT(*) FROM jawaban j WHERE j.peserta_id = pu.id AND j.jawaban IS NOT NULL) AS dijawab,
       (SELECT COUNT(*) FROM jawaban j WHERE j.peserta_id = pu.id AND j.ragu = 1) AS ragu
-    FROM peserta_ujian pu WHERE pu.ujian_id = ?`, u.id).map((p) => [p.siswa_id, p]));
+    FROM peserta_ujian pu WHERE pu.ujian_id = ?`, u.id)).map((p) => [p.siswa_id, p]));
   const t = now();
   const kelasGuru = ctx.user.peran === 'guru' && ctx.user.kelas ? ctx.user.kelas : null;
   const rows = siswa.filter((s) => !kelasGuru || s.kelas === kelasGuru).map((s) => {
@@ -150,7 +156,7 @@ function dataMonitor(ctx, u) {
   });
   const hitung = (...st) => rows.filter((r) => st.includes(r.status)).length;
   return {
-    ujian: { ...u, paket: paketInfo(u.mapel, u.kategori), batas_jam: batasJam(u) },
+    ujian: { ...u, paket: await paketInfo(u.mapel, u.kategori), batas_jam: batasJam(u) },
     ringkasan: {
       total: rows.length, belum: hitung('belum'), mengerjakan: hitung('mengerjakan', 'jeda', 'terkunci'), selesai: hitung('selesai'), absen: hitung('absen'),
       online: rows.filter((r) => r.online).length, terkunci: hitung('terkunci'), jeda: hitung('jeda'), perhatian: rows.filter((r) => r.perhatian || r.status === 'terkunci').length,
@@ -170,40 +176,40 @@ route('GET', '/api/stream/monitor', (ctx, res) => {
   ctx.req.on('close', off);
 }, { raw: true });
 
-function pesertaDari(ctx) {
+async function pesertaDari(ctx) {
   bolehMonitor(ctx);
-  const u = ambilUjian(ctx, int(ctx.params.id));
-  const s = one(`SELECT * FROM pengguna WHERE id = ? AND npsn = ? AND peran = 'siswa'`, int(ctx.params.siswa), u.npsn);
+  const u = await ambilUjian(ctx, int(ctx.params.id));
+  const s = await one(`SELECT * FROM pengguna WHERE id = ? AND npsn = ? AND peran = 'siswa'`, int(ctx.params.siswa), u.npsn);
   if (!s) throw httpError(404, 'Siswa tidak ditemukan.');
-  return { u, s, p: one('SELECT * FROM peserta_ujian WHERE ujian_id = ? AND siswa_id = ?', u.id, s.id) };
+  return { u, s, p: await one('SELECT * FROM peserta_ujian WHERE ujian_id = ? AND siswa_id = ?', u.id, s.id) };
 }
 
-route('POST', '/api/ujian/:id/peserta/:siswa/reset', (ctx) => {
-  const { u, p } = pesertaDari(ctx);
-  if (p) run('DELETE FROM peserta_ujian WHERE id = ?', p.id);
+route('POST', '/api/ujian/:id/peserta/:siswa/reset', async (ctx) => {
+  const { u, p } = await pesertaDari(ctx);
+  if (p) await run('DELETE FROM peserta_ujian WHERE id = ?', p.id);
   notify(u.npsn);
   return true;
 });
-route('POST', '/api/ujian/:id/peserta/:siswa/selesai', (ctx) => {
-  const { u, p } = pesertaDari(ctx);
+route('POST', '/api/ujian/:id/peserta/:siswa/selesai', async (ctx) => {
+  const { u, p } = await pesertaDari(ctx);
   if (!p || p.status !== 'mengerjakan') throw httpError(400, 'Siswa tidak sedang mengerjakan.');
-  finalize(p.id, 'proktor');
+  await finalize(p.id, 'proktor');
   notify(u.npsn);
   return true;
 });
-route('POST', '/api/ujian/:id/peserta/:siswa/tambah-waktu', (ctx) => {
-  const { u, p } = pesertaDari(ctx);
+route('POST', '/api/ujian/:id/peserta/:siswa/tambah-waktu', async (ctx) => {
+  const { u, p } = await pesertaDari(ctx);
   if (!p || p.status !== 'mengerjakan') throw httpError(400, 'Siswa tidak sedang mengerjakan.');
   const menit = Math.max(1, Math.min(120, int(ctx.body.menit, 5)));
-  run('UPDATE peserta_ujian SET durasi_ms = durasi_ms + ? WHERE id = ?', menit * 60e3, p.id);
+  await run('UPDATE peserta_ujian SET durasi_ms = durasi_ms + ? WHERE id = ?', menit * 60e3, p.id);
   notify(u.npsn);
   return true;
 });
-route('POST', '/api/ujian/:id/peserta/:siswa/absen', (ctx) => {
-  const { u, s, p } = pesertaDari(ctx);
+route('POST', '/api/ujian/:id/peserta/:siswa/absen', async (ctx) => {
+  const { u, s, p } = await pesertaDari(ctx);
   if (p && p.status !== 'absen') throw httpError(400, 'Siswa sudah mulai mengerjakan.');
-  if (p) run('DELETE FROM peserta_ujian WHERE id = ?', p.id);
-  else run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status) VALUES (?, ?, 'absen')`, u.id, s.id);
+  if (p) await run('DELETE FROM peserta_ujian WHERE id = ?', p.id);
+  else await run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status) VALUES (?, ?, 'absen')`, u.id, s.id);
   notify(u.npsn);
   return true;
 });
@@ -214,17 +220,17 @@ function siswaOnly(ctx) {
   return ctx.user;
 }
 
-route('GET', '/api/siswa/ujian', (ctx) => {
+route('GET', '/api/siswa/ujian', async (ctx) => {
   const s = siswaOnly(ctx);
-  const items = all(`SELECT uj.id, uj.mapel, uj.kategori, uj.durasi, uj.sesi, uj.kelas, uj.tanggal, uj.jam_mulai, uj.jam_selesai, uj.aktif,
+  const items = await all(`SELECT uj.id, uj.mapel, uj.kategori, uj.durasi, uj.sesi, uj.kelas, uj.tanggal, uj.jam_mulai, uj.jam_selesai, uj.aktif,
       m.nama AS mapel_nama, k.nama AS kategori_nama,
       pu.id AS peserta_id, pu.status AS status_peserta, pu.nilai, pu.perlu_koreksi
     FROM ujian uj JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori
     LEFT JOIN peserta_ujian pu ON pu.ujian_id = uj.id AND pu.siswa_id = ?
     WHERE uj.npsn = ? AND (uj.sesi = 'SEMUA' OR uj.sesi = ?) AND (uj.kelas = 'SEMUA' OR uj.kelas = ?)
-      AND (uj.aktif = 1 OR pu.id IS NOT NULL OR uj.tanggal >= date('now', 'localtime'))
-    ORDER BY uj.aktif DESC, uj.tanggal, uj.jam_mulai`, s.id, s.npsn, s.sesi || '', s.kelas || '');
-  for (const u of items) u.jumlah_soal = paketInfo(u.mapel, u.kategori).siap;
+      AND (uj.aktif = 1 OR pu.id IS NOT NULL OR uj.tanggal >= ?)
+    ORDER BY uj.aktif DESC, uj.tanggal, uj.jam_mulai`, s.id, s.npsn, s.sesi || '', s.kelas || '', hariIni());
+  for (const u of items) u.jumlah_soal = (await paketInfo(u.mapel, u.kategori)).siap;
   return items;
 });
 
@@ -234,32 +240,33 @@ function ujianDari(p) {
 }
 
 /** Baca sesi peserta; kumpulkan otomatis bila waktu/jam sesi sudah habis. */
-function bacaSesi(ctx, pid, { lanjutkan = false } = {}) {
+async function bacaSesi(ctx, pid, { lanjutkan = false } = {}) {
   const s = siswaOnly(ctx);
-  let p = one('SELECT * FROM peserta_ujian WHERE id = ? AND siswa_id = ?', pid, s.id);
+  let p = await one('SELECT * FROM peserta_ujian WHERE id = ? AND siswa_id = ?', pid, s.id);
   if (!p) throw httpError(404, 'Sesi ujian tidak ditemukan.');
-  const uj = ujianDari(p);
+  const uj = await ujianDari(p);
   if (p.status === 'mengerjakan') {
     const bj = batasJam(uj);
-    if (bj && now() >= bj) finalize(p.id, 'jam');
-    else if (sisaWaktu(p, uj) < -5e3) finalize(p.id, 'waktu');
-    else if (lanjutkan && !ctx.impersonator) lanjut(p.id); // siswa kembali → waktu berjalan lagi
-    if (p.status !== 'mengerjakan' || lanjutkan) notify(uj.npsn);
-    p = one('SELECT * FROM peserta_ujian WHERE id = ?', pid);
+    let ubah = lanjutkan;
+    if (bj && now() >= bj) { await finalize(p.id, 'jam'); ubah = true; }
+    else if (sisaWaktu(p, uj) < -5e3) { await finalize(p.id, 'waktu'); ubah = true; }
+    else if (lanjutkan && !ctx.impersonator) await lanjut(p.id); // siswa kembali → waktu berjalan lagi
+    if (ubah) notify(uj.npsn);
+    if (ubah) p = await one('SELECT * FROM peserta_ujian WHERE id = ?', pid);
   }
   return { p, uj };
 }
 
-function statePeserta(p, uj) {
+async function statePeserta(p, uj) {
   const ids = parseJSON(p.urutan, []);
-  const byId = new Map(all(`SELECT id, tipe, pertanyaan, opsi, kunci, skor_maks FROM soal WHERE id IN (${ids.map(() => '?').join(',') || 'NULL'})`, ...ids)
+  const byId = new Map((await all(`SELECT id, tipe, pertanyaan, opsi, kunci, skor_maks FROM soal WHERE id = ANY(?::int[])`, ids))
     .map((r) => [r.id, parseSoal(r)]));
   const soal = ids.map((id) => byId.get(id)).filter(Boolean).map((s) => {
     const o = { id: s.id, tipe: s.tipe, pertanyaan: s.pertanyaan, opsi: s.opsi, skor_maks: s.skor_maks };
     if (s.tipe === 'isian' || s.tipe === 'uraian') o.manual = isManual(s);
     return o; // kunci tidak pernah dikirim ke siswa
   });
-  const jawaban = Object.fromEntries(all('SELECT soal_id, jawaban, ragu FROM jawaban WHERE peserta_id = ?', p.id)
+  const jawaban = Object.fromEntries((await all('SELECT soal_id, jawaban, ragu FROM jawaban WHERE peserta_id = ?', p.id))
     .map((j) => [j.soal_id, { jawaban: parseJSON(j.jawaban), ragu: !!j.ragu }]));
   return {
     peserta: waktuPeserta(p, uj),
@@ -276,13 +283,13 @@ function waktuPeserta(p, uj) {
   };
 }
 
-route('POST', '/api/siswa/ujian/:id/mulai', (ctx) => {
+route('POST', '/api/siswa/ujian/:id/mulai', async (ctx) => {
   const s = siswaOnly(ctx);
-  const uj = one(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama FROM ujian uj JOIN mapel m ON m.kode = uj.mapel
+  const uj = await one(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama FROM ujian uj JOIN mapel m ON m.kode = uj.mapel
     JOIN kategori k ON k.kode = uj.kategori WHERE uj.id = ? AND uj.npsn = ?`, int(ctx.params.id), s.npsn);
   if (!uj) throw httpError(404, 'Ujian tidak ditemukan.');
   if ((uj.sesi !== 'SEMUA' && uj.sesi !== s.sesi) || (uj.kelas !== 'SEMUA' && uj.kelas !== s.kelas)) throw httpError(403, 'Ujian ini bukan untuk kelas/sesi kamu.');
-  let p = one('SELECT * FROM peserta_ujian WHERE ujian_id = ? AND siswa_id = ?', uj.id, s.id);
+  let p = await one('SELECT * FROM peserta_ujian WHERE ujian_id = ? AND siswa_id = ?', uj.id, s.id);
   if (p?.status === 'absen') throw httpError(403, 'Kamu ditandai tidak hadir. Hubungi proktor.');
   if (p?.status === 'selesai') throw httpError(400, 'Kamu sudah menyelesaikan ujian ini.');
   if (!uj.aktif) throw httpError(400, 'Ujian belum dibuka oleh proktor.');
@@ -290,94 +297,95 @@ route('POST', '/api/siswa/ujian/:id/mulai', (ctx) => {
   const bj = batasJam(uj);
   if (bj && now() >= bj) throw httpError(400, 'Jam sesi ujian ini sudah berakhir.');
   if (!p) {
-    const ids = all(`SELECT id FROM soal WHERE mapel = ? AND kategori = ? AND status = 'disetujui' AND aktif = 1 ORDER BY nomor, id`, uj.mapel, uj.kategori).map((r) => r.id);
+    const ids = (await all(`SELECT id FROM soal WHERE mapel = ? AND kategori = ? AND status = 'disetujui' AND aktif = 1 ORDER BY nomor, id`, uj.mapel, uj.kategori)).map((r) => r.id);
     if (!ids.length) throw httpError(400, 'Paket soal belum tersedia.');
     if (uj.acak) for (let i = ids.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [ids[i], ids[j]] = [ids[j], ids[i]]; }
     const t = now();
-    run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status, urutan, mulai_at, durasi_ms, terpakai_ms, aktif_sejak, last_active)
-      VALUES (?, ?, 'mengerjakan', ?, ?, ?, 0, ?, ?)`, uj.id, s.id, JSON.stringify(ids), t, uj.durasi * 60e3, t, t);
+    // dua klik "Mulai" bersamaan tidak membuat peserta ganda
+    await run(`INSERT INTO peserta_ujian (ujian_id, siswa_id, status, urutan, mulai_at, durasi_ms, terpakai_ms, aktif_sejak, last_active)
+      VALUES (?, ?, 'mengerjakan', ?, ?, ?, 0, ?, ?) ON CONFLICT (ujian_id, siswa_id) DO NOTHING`, uj.id, s.id, JSON.stringify(ids), t, uj.durasi * 60e3, t, t);
   }
-  p = one('SELECT * FROM peserta_ujian WHERE ujian_id = ? AND siswa_id = ?', uj.id, s.id);
-  if (!ctx.impersonator) lanjut(p.id);
+  p = await one('SELECT * FROM peserta_ujian WHERE ujian_id = ? AND siswa_id = ?', uj.id, s.id);
+  if (!ctx.impersonator) await lanjut(p.id);
   notify(uj.npsn);
-  return statePeserta(one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj);
+  return statePeserta(await one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj);
 });
 
-route('GET', '/api/siswa/sesi/:pid', (ctx) => {
-  const { p, uj } = bacaSesi(ctx, int(ctx.params.pid), { lanjutkan: true });
+route('GET', '/api/siswa/sesi/:pid', async (ctx) => {
+  const { p, uj } = await bacaSesi(ctx, int(ctx.params.pid), { lanjutkan: true });
   return statePeserta(p, uj);
 });
 
 const SUSULAN_MS = 15 * 60e3; // jawaban offline masih diterima sebentar setelah waktu habis
 
-route('PUT', '/api/siswa/sesi/:pid/jawaban', (ctx) => {
-  const { p, uj } = bacaSesi(ctx, int(ctx.params.pid));
+route('PUT', '/api/siswa/sesi/:pid/jawaban', async (ctx) => {
+  const { p, uj } = await bacaSesi(ctx, int(ctx.params.pid));
   const susulan = p.status === 'selesai' && ['waktu', 'jam'].includes(p.selesai_karena) && now() - p.selesai_at < SUSULAN_MS && ctx.body.offline;
   if (p.status !== 'mengerjakan' && !susulan) throw httpError(409, 'Waktu ujian sudah habis. Jawaban terakhir sudah dikumpulkan.');
   const sid = int(ctx.body.soal_id);
   if (!parseJSON(p.urutan, []).includes(sid)) throw httpError(400, 'Soal bukan bagian dari ujian ini.');
-  const soal = parseSoal(one('SELECT id, tipe, kunci, skor_maks FROM soal WHERE id = ?', sid));
+  const soal = parseSoal(await one('SELECT id, tipe, kunci, skor_maks FROM soal WHERE id = ?', sid));
   const jw = ctx.body.jawaban;
   const answered = isAnswered(soal.tipe, jw);
   const sk = answered ? score(soal, jw) : isManual(soal) ? null : 0;
-  tx(() => {
-    run(`INSERT INTO jawaban (peserta_id, soal_id, jawaban, ragu, skor, dikoreksi, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?)
+  await tx(async () => {
+    await run(`INSERT INTO jawaban (peserta_id, soal_id, jawaban, ragu, skor, dikoreksi, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?)
       ON CONFLICT (peserta_id, soal_id) DO UPDATE SET jawaban = excluded.jawaban, ragu = excluded.ragu, skor = excluded.skor, dikoreksi = 0, updated_at = excluded.updated_at`,
       p.id, sid, answered ? JSON.stringify(jw) : null, ctx.body.ragu ? 1 : 0, sk, now());
-    if (susulan) recompute(p.id);
-    else run('UPDATE peserta_ujian SET last_active = ? WHERE id = ?', now(), p.id);
+    if (susulan) await recompute(p.id);
+    else await run('UPDATE peserta_ujian SET last_active = ? WHERE id = ?', now(), p.id);
   });
   notify(uj.npsn);
-  return { tersimpan: now(), ...waktuPeserta(one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj), waktu_server: now() };
+  return { tersimpan: now(), ...waktuPeserta(susulan ? await one('SELECT * FROM peserta_ujian WHERE id = ?', p.id) : p, uj), waktu_server: now() };
 });
 
-route('POST', '/api/siswa/sesi/:pid/ping', (ctx) => {
-  const { p, uj } = bacaSesi(ctx, int(ctx.params.pid));
+route('POST', '/api/siswa/sesi/:pid/ping', async (ctx) => {
+  const { p, uj } = await bacaSesi(ctx, int(ctx.params.pid));
   if (p.status === 'mengerjakan') {
-    if (!p.aktif_sejak && !ctx.impersonator) lanjut(p.id); // kembali terhubung setelah terputus lama
-    run('UPDATE peserta_ujian SET last_active = ?, keluar_layar = keluar_layar + ? WHERE id = ?', now(), ctx.body.keluar ? 1 : 0, p.id);
+    if (!p.aktif_sejak && !ctx.impersonator) await lanjut(p.id); // kembali terhubung setelah terputus lama
+    await run('UPDATE peserta_ujian SET last_active = ?, keluar_layar = keluar_layar + ? WHERE id = ?', now(), ctx.body.keluar ? 1 : 0, p.id);
   }
   notify(uj.npsn);
-  return { ...waktuPeserta(one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj), waktu_server: now() };
+  return { ...waktuPeserta(await one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj), waktu_server: now() };
 });
 
 /** Siswa berupaya keluar dari ujian → akun dikunci, waktu dijeda, harus direset admin. */
-route('POST', '/api/siswa/sesi/:pid/kunci', (ctx) => {
-  const { p, uj } = bacaSesi(ctx, int(ctx.params.pid));
+route('POST', '/api/siswa/sesi/:pid/kunci', async (ctx) => {
+  const { p, uj } = await bacaSesi(ctx, int(ctx.params.pid));
   if (ctx.impersonator) return { dikunci: false };
-  tx(() => {
+  await tx(async () => {
     if (p.status === 'mengerjakan') {
-      jeda(p.id);
-      run('UPDATE peserta_ujian SET keluar_layar = keluar_layar + 1 WHERE id = ?', p.id);
+      await jeda(p.id);
+      await run('UPDATE peserta_ujian SET keluar_layar = keluar_layar + 1 WHERE id = ?', p.id);
     }
-    run('UPDATE pengguna SET terkunci = 1, sesi_login = NULL WHERE id = ?', ctx.user.id);
+    await run('UPDATE pengguna SET terkunci = 1, sesi_login = NULL WHERE id = ?', ctx.user.id);
   });
   audit('kunci', ctx.user.username, 'upaya keluar ujian', uj.id);
   notify(uj.npsn);
   return { dikunci: true };
 });
 
-route('POST', '/api/siswa/sesi/:pid/selesai', (ctx) => {
-  const { p, uj } = bacaSesi(ctx, int(ctx.params.pid));
+route('POST', '/api/siswa/sesi/:pid/selesai', async (ctx) => {
+  const { p, uj } = await bacaSesi(ctx, int(ctx.params.pid));
   if (p.status === 'selesai') return waktuPeserta(p, uj);
   const waktuHabis = sisaWaktu(p, uj) <= 15e3;
   if (!waktuHabis) {
     const ids = parseJSON(p.urutan, []);
-    const jw = all('SELECT soal_id, jawaban, ragu FROM jawaban WHERE peserta_id = ?', p.id);
+    const jw = await all('SELECT soal_id, jawaban, ragu FROM jawaban WHERE peserta_id = ?', p.id);
     const dijawab = jw.filter((j) => j.jawaban !== null).length;
     const ragu = jw.filter((j) => j.ragu).length;
     if (dijawab < ids.length) throw httpError(400, `Masih ada ${ids.length - dijawab} soal yang belum dijawab.`);
     if (ragu) throw httpError(400, `Masih ada ${ragu} soal bertanda ragu-ragu.`);
     // soal kategori / menjodohkan wajib terjawab di semua pernyataan
-    const soalMap = new Map(ids.length ? all(`SELECT id, tipe, opsi FROM soal WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).map((x) => [x.id, { ...x, opsi: parseJSON(x.opsi) }]) : []);
+    const soalMap = new Map((await all(`SELECT id, tipe, opsi FROM soal WHERE id = ANY(?::int[])`, ids)).map((x) => [x.id, { ...x, opsi: parseJSON(x.opsi) }]));
     const kurang = ids.map((id, i) => [i + 1, soalMap.get(id), jw.find((j) => j.soal_id === id)])
       .filter(([, so, j]) => so && butirWajib(so).length && !isLengkap(so, parseJSON(j?.jawaban))).map(([no]) => no);
     if (kurang.length) throw httpError(400, `Soal nomor ${kurang.join(', ')} belum lengkap. Jawab semua pernyataan pada soal tersebut.`);
   }
   const bj = batasJam(uj);
-  finalize(p.id, waktuHabis ? (bj && now() >= bj - 15e3 ? 'jam' : 'waktu') : 'siswa');
+  await finalize(p.id, waktuHabis ? (bj && now() >= bj - 15e3 ? 'jam' : 'waktu') : 'siswa');
   notify(uj.npsn);
-  return waktuPeserta(one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj);
+  return waktuPeserta(await one('SELECT * FROM peserta_ujian WHERE id = ?', p.id), uj);
 });
 
 route('GET', '/api/siswa/nilai', (ctx) => {
@@ -387,14 +395,14 @@ route('GET', '/api/siswa/nilai', (ctx) => {
     WHERE pu.siswa_id = ? AND pu.status = 'selesai' ORDER BY pu.selesai_at DESC`, s.id);
 });
 
-route('POST', '/api/siswa/feedback', (ctx) => {
+route('POST', '/api/siswa/feedback', async (ctx) => {
   const s = siswaOnly(ctx);
   const pesan = str(ctx.body.pesan).slice(0, 500);
   if (!pesan) throw httpError(400, 'Tulis pesanmu dulu.');
   const sid = int(ctx.body.soal_id);
-  const ok = one(`SELECT 1 FROM peserta_ujian WHERE siswa_id = ? AND EXISTS (SELECT 1 FROM json_each(urutan) WHERE value = ?)`, s.id, sid);
+  const ok = await one(`SELECT 1 FROM peserta_ujian WHERE siswa_id = ? AND urutan::jsonb @> to_jsonb(ARRAY[?::int])`, s.id, sid);
   if (!ok) throw httpError(400, 'Soal tidak ditemukan.');
-  run('INSERT INTO feedback (soal_id, siswa_id, pesan) VALUES (?, ?, ?)', sid, s.id, pesan);
+  await run('INSERT INTO feedback (soal_id, siswa_id, pesan) VALUES (?, ?, ?)', sid, s.id, pesan);
   return true;
 });
 
@@ -414,22 +422,22 @@ route('GET', '/api/koreksi', (ctx) => {
       (SELECT COUNT(*) FROM jawaban j JOIN soal so ON so.id = j.soal_id WHERE j.peserta_id = pu.id AND j.jawaban IS NOT NULL AND j.dikoreksi = 1) AS dikoreksi
     FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id JOIN pengguna p ON p.id = pu.siswa_id
     JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori JOIN sekolah s ON s.npsn = uj.npsn
-    WHERE pu.status = 'selesai' AND (? IS NULL OR uj.npsn = ?) AND (? IS NULL OR p.kelas = ?)
+    WHERE pu.status = 'selesai' AND (?::text IS NULL OR uj.npsn = ?) AND (?::text IS NULL OR p.kelas = ?)
       AND (? = '' OR uj.mapel = ?) AND (? = '' OR uj.kategori = ?)
       AND (pu.perlu_koreksi > 0 OR EXISTS (SELECT 1 FROM jawaban j WHERE j.peserta_id = pu.id AND j.dikoreksi = 1))
     ORDER BY pu.perlu_koreksi = 0, p.kelas, p.nama LIMIT 1000`,
     npsn, npsn, kelas, kelas, str(q.mapel), str(q.mapel), str(q.kategori), str(q.kategori));
 });
 
-route('GET', '/api/koreksi/:pid', (ctx) => {
+route('GET', '/api/koreksi/:pid', async (ctx) => {
   const { npsn } = scopeKoreksi(ctx);
-  const p = one(`SELECT pu.*, p.nama, p.username, p.kelas, uj.npsn, uj.mapel, uj.kategori, m.nama AS mapel_nama, k.nama AS kategori_nama
+  const p = await one(`SELECT pu.*, p.nama, p.username, p.kelas, uj.npsn, uj.mapel, uj.kategori, m.nama AS mapel_nama, k.nama AS kategori_nama
     FROM peserta_ujian pu JOIN pengguna p ON p.id = pu.siswa_id JOIN ujian uj ON uj.id = pu.ujian_id
     JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori WHERE pu.id = ?`, int(ctx.params.pid));
   if (!p || (npsn && p.npsn !== npsn)) throw httpError(404, 'Data tidak ditemukan.');
   const ids = parseJSON(p.urutan, []);
-  const items = all(`SELECT j.id, j.soal_id, j.jawaban, j.skor, j.dikoreksi, j.catatan, s.tipe, s.pertanyaan, s.kunci, s.skor_maks
-    FROM jawaban j JOIN soal s ON s.id = j.soal_id WHERE j.peserta_id = ? AND j.jawaban IS NOT NULL`, p.id)
+  const items = (await all(`SELECT j.id, j.soal_id, j.jawaban, j.skor, j.dikoreksi, j.catatan, s.tipe, s.pertanyaan, s.kunci, s.skor_maks
+    FROM jawaban j JOIN soal s ON s.id = j.soal_id WHERE j.peserta_id = ? AND j.jawaban IS NOT NULL`, p.id))
     .map((r) => ({ ...r, jawaban: parseJSON(r.jawaban), kunci: parseJSON(r.kunci), nomor: ids.indexOf(r.soal_id) + 1 }))
     .filter((r) => isManual(r))
     .sort((a, b) => a.nomor - b.nomor);
@@ -437,16 +445,16 @@ route('GET', '/api/koreksi/:pid', (ctx) => {
   return { peserta: p, items };
 });
 
-route('PUT', '/api/koreksi/jawaban/:id', (ctx) => {
+route('PUT', '/api/koreksi/jawaban/:id', async (ctx) => {
   const { npsn } = scopeKoreksi(ctx);
-  const j = one(`SELECT j.*, s.skor_maks, uj.npsn FROM jawaban j JOIN soal s ON s.id = j.soal_id
+  const j = await one(`SELECT j.*, s.skor_maks, uj.npsn FROM jawaban j JOIN soal s ON s.id = j.soal_id
     JOIN peserta_ujian pu ON pu.id = j.peserta_id JOIN ujian uj ON uj.id = pu.ujian_id WHERE j.id = ?`, int(ctx.params.id));
   if (!j || (npsn && j.npsn !== npsn)) throw httpError(404, 'Jawaban tidak ditemukan.');
   const skor = Number(ctx.body.skor);
   if (!(skor >= 0 && skor <= j.skor_maks)) throw httpError(400, `Skor harus antara 0 dan ${j.skor_maks}.`);
-  tx(() => {
-    run('UPDATE jawaban SET skor = ?, dikoreksi = 1, catatan = ?, dikoreksi_oleh = ? WHERE id = ?', skor, str(ctx.body.catatan) || null, ctx.user.id, j.id);
-    recompute(j.peserta_id);
+  await tx(async () => {
+    await run('UPDATE jawaban SET skor = ?, dikoreksi = 1, catatan = ?, dikoreksi_oleh = ? WHERE id = ?', skor, str(ctx.body.catatan) || null, ctx.user.id, j.id);
+    await recompute(j.peserta_id);
   });
   return one('SELECT perlu_koreksi, nilai FROM peserta_ujian WHERE id = ?', j.peserta_id);
 });

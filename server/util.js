@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { all, one, run, tx, setting, setSetting } from './db.js';
+import { all, one, run, tx, query, setting, setSetting } from './db.js';
 import { httpError } from './auth.js';
 import { isManual, score } from './scoring.js';
 
@@ -7,14 +7,14 @@ export const now = () => Date.now();
 export const int = (v, d = null) => (v === undefined || v === null || v === '' || isNaN(+v) ? d : Math.trunc(+v));
 export const str = (v) => (v === undefined || v === null ? '' : String(v).trim());
 /** Target capaian: milik sekolah bila diatur, selain itu target pusat. */
-export function targetCapaian(npsn) {
+export async function targetCapaian(npsn) {
   if (npsn && npsn !== '-') {
-    const r = one('SELECT target_capaian FROM sekolah WHERE npsn = ?', npsn);
+    const r = await one('SELECT target_capaian FROM sekolah WHERE npsn = ?', npsn);
     if (r?.target_capaian != null) return Number(r.target_capaian);
   }
   return Number(setting('target_capaian', setting('kkm', 70)));
 }
-export const kkm = () => targetCapaian(null);
+export const kkm = () => Number(setting('target_capaian', setting('kkm', 70)));
 
 export function parseJSON(s, d = null) {
   if (s === null || s === undefined) return d;
@@ -64,29 +64,29 @@ export function cekKodeVerifikasi(kode) {
  * Sekali jalan: nilai ulang jawaban soal kategori dengan aturan "benar bila semua pernyataan sesuai kunci",
  * lalu hitung ulang nilai peserta yang terdampak.
  */
-export function nilaiUlangKategori() {
+export async function nilaiUlangKategori() {
   if (setting('skor_kategori_semua', null)) return 0;
-  const rows = all(`SELECT j.peserta_id, j.soal_id, j.jawaban, j.skor, s.tipe, s.kunci, s.skor_maks FROM jawaban j JOIN soal s ON s.id = j.soal_id
+  const rows = await all(`SELECT j.peserta_id, j.soal_id, j.jawaban, j.skor, s.tipe, s.kunci, s.skor_maks FROM jawaban j JOIN soal s ON s.id = j.soal_id
     WHERE s.tipe = 'pg_kategori' AND j.jawaban IS NOT NULL AND COALESCE(j.dikoreksi, 0) = 0`);
   const peserta = new Set();
-  tx(() => {
+  await tx(async () => {
     for (const r of rows) {
       const baru = score({ ...r, kunci: parseJSON(r.kunci) }, parseJSON(r.jawaban));
-      if (baru !== r.skor) { run('UPDATE jawaban SET skor = ? WHERE peserta_id = ? AND soal_id = ?', baru, r.peserta_id, r.soal_id); peserta.add(r.peserta_id); }
+      if (baru !== r.skor) { await run('UPDATE jawaban SET skor = ? WHERE peserta_id = ? AND soal_id = ?', baru, r.peserta_id, r.soal_id); peserta.add(r.peserta_id); }
     }
-    for (const pid of peserta) recompute(pid);
-    setSetting('skor_kategori_semua', Date.now());
+    for (const pid of peserta) await recompute(pid);
+    await setSetting('skor_kategori_semua', Date.now());
   });
   return peserta.size;
 }
 
-export function recompute(pid) {
-  const p = one('SELECT * FROM peserta_ujian WHERE id = ?', pid);
+export async function recompute(pid) {
+  const p = await one('SELECT * FROM peserta_ujian WHERE id = ?', pid);
   if (!p || p.status === 'absen') return;
   const ids = parseJSON(p.urutan, []);
   if (!ids.length) return;
-  const soal = all(`SELECT id, tipe, kunci, skor_maks FROM soal WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids);
-  const jw = new Map(all('SELECT soal_id, jawaban, skor, dikoreksi FROM jawaban WHERE peserta_id = ?', pid).map((j) => [j.soal_id, j]));
+  const soal = await all(`SELECT id, tipe, kunci, skor_maks FROM soal WHERE id = ANY(?::int[])`, ids);
+  const jw = new Map((await all('SELECT soal_id, jawaban, skor, dikoreksi FROM jawaban WHERE peserta_id = ?', pid)).map((j) => [j.soal_id, j]));
   let skor = 0, maks = 0, pending = 0;
   for (const s of soal) {
     maks += s.skor_maks;
@@ -96,7 +96,7 @@ export function recompute(pid) {
     skor += j?.skor ?? 0;
   }
   const nilai = p.status === 'selesai' && pending === 0 && maks > 0 ? Math.round((skor / maks) * 1000) / 10 : null;
-  run('UPDATE peserta_ujian SET skor = ?, skor_maks = ?, perlu_koreksi = ?, nilai = ? WHERE id = ?', skor, maks, pending, nilai, pid);
+  await run('UPDATE peserta_ujian SET skor = ?, skor_maks = ?, perlu_koreksi = ?, nilai = ? WHERE id = ?', skor, maks, pending, nilai, pid);
 }
 
 // ---------- pengaturan waktu pengerjaan ----------
@@ -119,49 +119,52 @@ export function sisaWaktu(p, uj, t = now()) {
 }
 
 /** Jeda waktu peserta (siswa terlogout / terputus). */
-export function jeda(pid, at = now()) {
-  run(`UPDATE peserta_ujian SET terpakai_ms = terpakai_ms + MAX(0, ? - aktif_sejak), aktif_sejak = NULL
+export async function jeda(pid, at = now()) {
+  await run(`UPDATE peserta_ujian SET terpakai_ms = terpakai_ms + GREATEST(0, ?::bigint - aktif_sejak), aktif_sejak = NULL
     WHERE id = ? AND aktif_sejak IS NOT NULL`, at, pid);
 }
 
 /** Lanjutkan waktu saat siswa kembali. */
-export function lanjut(pid) {
-  run(`UPDATE peserta_ujian SET aktif_sejak = ?, last_active = ? WHERE id = ? AND aktif_sejak IS NULL AND status = 'mengerjakan'`, now(), now(), pid);
+export async function lanjut(pid) {
+  await run(`UPDATE peserta_ujian SET aktif_sejak = ?, last_active = ? WHERE id = ? AND aktif_sejak IS NULL AND status = 'mengerjakan'`, now(), now(), pid);
 }
 
-export function finalize(pid, karena = 'siswa') {
-  jeda(pid);
-  run(`UPDATE peserta_ujian SET status = 'selesai', selesai_at = COALESCE(selesai_at, ?), selesai_karena = ? WHERE id = ? AND status = 'mengerjakan'`, now(), karena, pid);
-  recompute(pid);
+export async function finalize(pid, karena = 'siswa') {
+  await jeda(pid);
+  await run(`UPDATE peserta_ujian SET status = 'selesai', selesai_at = COALESCE(selesai_at, ?), selesai_karena = ? WHERE id = ? AND status = 'mengerjakan'`, now(), karena, pid);
+  await recompute(pid);
 }
 
 /**
  * Pemeriksaan berkala: kumpulkan peserta yang waktunya habis atau jam sesinya lewat,
  * dan jeda waktu peserta yang tidak terhubung terlalu lama.
  */
-export function sweepExpired(onChange) {
+export async function sweepExpired(onChange) {
   const t = now();
-  const rows = all(`SELECT pu.*, uj.tanggal, uj.jam_selesai, uj.npsn FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id WHERE pu.status = 'mengerjakan'`);
   let n = 0;
-  tx(() => {
+  await tx(async () => {
+    // hanya satu instans aplikasi yang menyapu pada satu waktu
+    const { rows: [k] } = await query('SELECT pg_try_advisory_xact_lock(20262027) AS dapat');
+    if (!k.dapat) return;
+    const rows = await all(`SELECT pu.*, uj.tanggal, uj.jam_selesai, uj.npsn FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id WHERE pu.status = 'mengerjakan'`);
     for (const p of rows) {
       if (p.aktif_sejak && p.last_active && t - p.last_active > STALE_MS) {
-        jeda(p.id, Math.max(p.aktif_sejak, p.last_active));
+        await jeda(p.id, Math.max(p.aktif_sejak, p.last_active));
         p.terpakai_ms += Math.max(0, p.last_active - p.aktif_sejak);
         p.aktif_sejak = null;
         onChange?.(p.npsn);
       }
       const bj = batasJam(p);
-      if (bj && t >= bj) { finalize(p.id, 'jam'); n++; onChange?.(p.npsn); continue; }
-      if (sisaWaktu(p, p, t) < -5e3) { finalize(p.id, 'waktu'); n++; onChange?.(p.npsn); }
+      if (bj && t >= bj) { await finalize(p.id, 'jam'); n++; onChange?.(p.npsn); continue; }
+      if (sisaWaktu(p, p, t) < -5e3) { await finalize(p.id, 'waktu'); n++; onChange?.(p.npsn); }
     }
   });
   return n;
 }
 
 /** Soal paket (mapel+kategori) yang siap diujikan. */
-export function paketInfo(mapel, kategori) {
-  const r = one(`SELECT
+export async function paketInfo(mapel, kategori) {
+  const r = await one(`SELECT
       SUM(CASE WHEN status = 'disetujui' AND aktif = 1 THEN 1 ELSE 0 END) AS siap,
       SUM(CASE WHEN status IN ('menunggu','revisi') AND aktif = 1 THEN 1 ELSE 0 END) AS belum,
       SUM(CASE WHEN status = 'disetujui' AND aktif = 1 THEN skor_maks ELSE 0 END) AS skor_maks
@@ -170,7 +173,7 @@ export function paketInfo(mapel, kategori) {
 }
 
 /** Siswa sasaran sebuah ujian. */
-export function sasaranUjian(u) {
+export async function sasaranUjian(u) {
   return all(`SELECT id, username, nama, kelas, sesi, jk, last_active, sesi_login, terkunci FROM pengguna
     WHERE peran = 'siswa' AND aktif = 1 AND npsn = ?
       AND (? = 'SEMUA' OR sesi = ?) AND (? = 'SEMUA' OR kelas = ?)

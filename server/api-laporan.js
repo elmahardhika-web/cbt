@@ -29,7 +29,7 @@ function statistik(vals, batas) {
 }
 
 /** Kumpulkan peserta selesai sesuai filter + rincian jawaban. */
-function kumpulkan(ctx, q) {
+async function kumpulkan(ctx, q) {
   const npsn = scopeNpsn(ctx, q.npsn);
   if (npsn === '-') throw httpError(403, 'Akun ini tidak terhubung ke sekolah.');
   const where = [`pu.status = 'selesai'`];
@@ -45,7 +45,7 @@ function kumpulkan(ctx, q) {
   add('p.kelas = ?', q.kelas);
   if (ctx.user.peran === 'guru' && ctx.user.kelas && !str(q.kelas)) add('p.kelas = ?', ctx.user.kelas);
   const w = where.join(' AND ');
-  const rows = all(`SELECT pu.id, pu.nilai, pu.skor, pu.skor_maks, pu.urutan, pu.perlu_koreksi, pu.selesai_at, pu.mulai_at, pu.ujian_id,
+  const rows = await all(`SELECT pu.id, pu.nilai, pu.skor, pu.skor_maks, pu.urutan, pu.perlu_koreksi, pu.selesai_at, pu.mulai_at, pu.ujian_id,
       p.id AS siswa_id, p.nama, p.username, p.kelas, p.jk,
       s.npsn, s.nama AS sekolah, s.provinsi_kode, s.provinsi, s.kabkota_kode, s.kabkota, s.kecamatan, s.kelurahan,
       uj.mapel, uj.kategori
@@ -56,18 +56,17 @@ function kumpulkan(ctx, q) {
   for (const r of rows) map.set(`${r.siswa_id}|${r.mapel}|${r.kategori}`, r);
   const peserta = [...map.values()];
   const ids = new Set(peserta.map((p) => p.id));
-  const jw = all(`SELECT j.peserta_id, j.soal_id, j.skor, j.jawaban FROM jawaban j JOIN peserta_ujian pu ON pu.id = j.peserta_id
-    JOIN ujian uj ON uj.id = pu.ujian_id JOIN pengguna p ON p.id = pu.siswa_id JOIN sekolah s ON s.npsn = uj.npsn WHERE ${w}`, ...args)
-    .filter((j) => ids.has(j.peserta_id));
+  // jawaban hanya untuk peserta terpilih (hasil terakhir tiap siswa)
+  const jw = ids.size ? await all(`SELECT peserta_id, soal_id, skor, jawaban FROM jawaban WHERE peserta_id = ANY(?::int[])`, [...ids]) : [];
   return { peserta, jw };
 }
 
-function analisis(ctx, q) {
-  const batas = targetCapaian(scopeNpsn(ctx, q.npsn));
-  const { peserta, jw } = kumpulkan(ctx, q);
+async function analisis(ctx, q) {
+  const batas = await targetCapaian(scopeNpsn(ctx, q.npsn));
+  const { peserta, jw } = await kumpulkan(ctx, q);
   const soalIds = new Set();
   peserta.forEach((p) => { p.ids = parseJSON(p.urutan, []); delete p.urutan; p.ids.forEach((i) => soalIds.add(i)); });
-  const soal = new Map(soalIds.size ? all(`SELECT id, nomor, tipe, pertanyaan, opsi, kunci, skor_maks, mapel, kategori FROM soal WHERE id IN (${[...soalIds].join(',')})`)
+  const soal = new Map(soalIds.size ? (await all(`SELECT id, nomor, tipe, pertanyaan, opsi, kunci, skor_maks, mapel, kategori FROM soal WHERE id = ANY(?::int[])`, [...soalIds]))
     .map((s) => [s.id, { ...s, opsi: parseJSON(s.opsi), kunci: parseJSON(s.kunci) }]) : []);
   const jmap = new Map();
   for (const j of jw) jmap.set(`${j.peserta_id}|${j.soal_id}`, j);
@@ -158,43 +157,43 @@ function analisis(ctx, q) {
 }
 
 route('GET', '/api/analisis', (ctx) => {
-  requireRole(ctx, 'superadmin', 'supervisor', 'admin', 'guru');
+  requireRole(ctx, 'superadmin', 'admin', 'guru');
   if (!str(ctx.query.mapel) || !str(ctx.query.kategori)) throw httpError(400, 'Pilih mata pelajaran dan kategori.');
   return analisis(ctx, ctx.query);
 });
 
-route('GET', '/api/analisis/opsi', (ctx) => {
-  requireRole(ctx, 'superadmin', 'supervisor', 'admin', 'guru');
+route('GET', '/api/analisis/opsi', async (ctx) => {
+  requireRole(ctx, 'superadmin', 'admin', 'guru');
   const npsn = scopeNpsn(ctx, ctx.query.npsn);
   return {
-    paket: all(`SELECT uj.mapel, m.nama AS mapel_nama, uj.kategori, k.nama AS kategori_nama, COUNT(*) AS n
+    paket: await all(`SELECT uj.mapel, m.nama AS mapel_nama, uj.kategori, k.nama AS kategori_nama, COUNT(*) AS n
       FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori
-      WHERE pu.status = 'selesai' AND (? IS NULL OR uj.npsn = ?) GROUP BY uj.mapel, uj.kategori ORDER BY k.urutan, m.urutan`, npsn, npsn),
-    wilayah: all(`SELECT DISTINCT provinsi_kode, provinsi, kabkota_kode, kabkota, kecamatan, kelurahan, npsn, nama FROM sekolah
-      WHERE (? IS NULL OR npsn = ?) ORDER BY provinsi, kabkota, kecamatan, kelurahan, nama`, npsn, npsn),
-    kelas: all(`SELECT DISTINCT kelas FROM pengguna WHERE peran = 'siswa' AND kelas IS NOT NULL AND (? IS NULL OR npsn = ?) ORDER BY kelas`, npsn, npsn).map((r) => r.kelas),
+      WHERE pu.status = 'selesai' AND (?::text IS NULL OR uj.npsn = ?) GROUP BY uj.mapel, uj.kategori, m.nama, k.nama, m.urutan, k.urutan ORDER BY k.urutan, m.urutan`, npsn, npsn),
+    wilayah: await all(`SELECT DISTINCT provinsi_kode, provinsi, kabkota_kode, kabkota, kecamatan, kelurahan, npsn, nama FROM sekolah
+      WHERE (?::text IS NULL OR npsn = ?) ORDER BY provinsi, kabkota, kecamatan, kelurahan, nama`, npsn, npsn),
+    kelas: (await all(`SELECT DISTINCT kelas FROM pengguna WHERE peran = 'siswa' AND kelas IS NOT NULL AND (?::text IS NULL OR npsn = ?) ORDER BY kelas`, npsn, npsn)).map((r) => r.kelas),
   };
 });
 
 // ---------- legger ----------
-route('GET', '/api/legger', (ctx) => {
+route('GET', '/api/legger', async (ctx) => {
   requireRole(ctx, 'superadmin', 'admin', 'guru');
   const npsn = scopeNpsn(ctx, ctx.query.npsn);
   if (!npsn || npsn === '-') throw httpError(400, 'Pilih sekolah.');
   const kategori = str(ctx.query.kategori);
   if (!kategori) throw httpError(400, 'Pilih kategori.');
   const kelas = str(ctx.query.kelas) || (ctx.user.peran === 'guru' ? ctx.user.kelas || '' : '');
-  const batas = targetCapaian(npsn);
-  const mapel = all(`SELECT DISTINCT m.kode, m.nama, m.urutan FROM ujian uj JOIN mapel m ON m.kode = uj.mapel
+  const batas = await targetCapaian(npsn);
+  const mapel = await all(`SELECT DISTINCT m.kode, m.nama, m.urutan FROM ujian uj JOIN mapel m ON m.kode = uj.mapel
     WHERE uj.npsn = ? AND uj.kategori = ? ORDER BY m.urutan, m.nama`, npsn, kategori);
-  const siswa = all(`SELECT id, username, nama, jk, kelas FROM pengguna WHERE peran = 'siswa' AND npsn = ? AND (? = '' OR kelas = ?) ORDER BY kelas, nama`, npsn, kelas, kelas);
+  const siswa = await all(`SELECT id, username, nama, jk, kelas FROM pengguna WHERE peran = 'siswa' AND npsn = ? AND (? = '' OR kelas = ?) ORDER BY kelas, nama`, npsn, kelas, kelas);
   const hasil = new Map();
   for (const m of mapel) {
-    const a = analisis(ctx, { npsn, mapel: m.kode, kategori, kelas });
+    const a = await analisis(ctx, { npsn, mapel: m.kode, kategori, kelas });
     for (const p of a.ranking) hasil.set(`${p.siswa_id}|${m.kode}`, p);
   }
-  const absen = new Set(all(`SELECT pu.siswa_id || '|' || uj.mapel AS k FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id
-    WHERE uj.npsn = ? AND uj.kategori = ? AND pu.status = 'absen'`, npsn, kategori).map((r) => r.k));
+  const absen = new Set((await all(`SELECT pu.siswa_id || '|' || uj.mapel AS k FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id
+    WHERE uj.npsn = ? AND uj.kategori = ? AND pu.status = 'absen'`, npsn, kategori)).map((r) => r.k));
   const rows = siswa.map((s) => {
     const nilai = {};
     let lengkap = mapel.length > 0, total = 0;
@@ -211,67 +210,73 @@ route('GET', '/api/legger', (ctx) => {
   urut.forEach((r, i) => { if (i === 0 || r.rata !== urut[i - 1].rata) rank = i + 1; r.peringkat = rank; });
   const ringkasan = Object.fromEntries(mapel.map((m) => [m.kode, statistik(rows.map((r) => r.nilai[m.kode].nilai ?? null), batas)]));
   return {
-    sekolah: one('SELECT * FROM sekolah WHERE npsn = ?', npsn),
-    kategori: one('SELECT * FROM kategori WHERE kode = ?', kategori),
+    sekolah: await one('SELECT * FROM sekolah WHERE npsn = ?', npsn),
+    kategori: await one('SELECT * FROM kategori WHERE kode = ?', kategori),
     kelas, target: batas, mapel, siswa: rows, ringkasan,
   };
 });
 
 // ---------- data cetak ----------
-route('GET', '/api/cetak/kartu', (ctx) => {
+route('GET', '/api/cetak/kartu', async (ctx) => {
   requireRole(ctx, 'superadmin', 'admin');
   const npsn = scopeNpsn(ctx, ctx.query.npsn);
   if (!npsn) throw httpError(400, 'Pilih sekolah.');
   const ids = str(ctx.query.ids).split(',').map((x) => int(x)).filter(Boolean);
   const kelas = str(ctx.query.kelas);
-  const siswa = all(`SELECT id, username, nama, kelas, sesi, jk, password_awal FROM pengguna
+  const siswa = await all(`SELECT id, username, nama, kelas, sesi, jk, nik, password_awal FROM pengguna
     WHERE peran = 'siswa' AND npsn = ? AND (? = '' OR kelas = ?) ${ids.length ? `AND id IN (${ids.join(',')})` : ''} ORDER BY kelas, nama`, npsn, kelas, kelas);
-  return { sekolah: one('SELECT * FROM sekolah WHERE npsn = ?', npsn), siswa };
+  // jadwal ujian yang akan datang dicetak di kartu sesuai kelas/sesi peserta
+  const jadwal = await all(`SELECT uj.id, uj.tanggal, uj.jam_mulai, uj.jam_selesai, uj.sesi, uj.kelas, uj.durasi, m.nama AS mapel_nama, k.nama AS kategori_nama
+    FROM ujian uj JOIN mapel m ON m.kode = uj.mapel JOIN kategori k ON k.kode = uj.kategori
+    WHERE uj.npsn = ? AND (uj.tanggal IS NULL OR uj.tanggal >= to_char(now() - interval '1 day', 'YYYY-MM-DD'))
+    ORDER BY uj.tanggal NULLS LAST, uj.jam_mulai, m.urutan LIMIT 60`, npsn);
+  return { sekolah: await one('SELECT * FROM sekolah WHERE npsn = ?', npsn), siswa, jadwal };
 });
 
-route('GET', '/api/cetak/berita-acara/:id', (ctx) => {
+route('GET', '/api/cetak/berita-acara/:id', async (ctx) => {
   requireRole(ctx, 'superadmin', 'admin', 'guru');
-  const uj = one(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama FROM ujian uj JOIN mapel m ON m.kode = uj.mapel
+  const uj = await one(`SELECT uj.*, m.nama AS mapel_nama, k.nama AS kategori_nama FROM ujian uj JOIN mapel m ON m.kode = uj.mapel
     JOIN kategori k ON k.kode = uj.kategori WHERE uj.id = ?`, int(ctx.params.id));
   if (!uj) throw httpError(404, 'Ujian tidak ditemukan.');
   assertSekolahAccess(ctx, uj.npsn);
-  const sasaran = sasaranUjian(uj);
-  const ps = new Map(all('SELECT * FROM peserta_ujian WHERE ujian_id = ?', uj.id).map((p) => [p.siswa_id, p]));
+  const sasaran = await sasaranUjian(uj);
+  const ps = new Map((await all('SELECT * FROM peserta_ujian WHERE ujian_id = ?', uj.id)).map((p) => [p.siswa_id, p]));
   const hadir = sasaran.filter((s) => ps.get(s.id) && ps.get(s.id).status !== 'absen');
   const tidakHadir = sasaran.filter((s) => !ps.get(s.id) || ps.get(s.id).status === 'absen').map((s) => ({ username: s.username, nama: s.nama, kelas: s.kelas }));
   const insiden = hadir.filter((s) => ps.get(s.id).keluar_layar > 0).map((s) => ({ username: s.username, nama: s.nama, keluar_layar: ps.get(s.id).keluar_layar }));
   const mulai = Math.min(...hadir.map((s) => ps.get(s.id).mulai_at).filter(Boolean));
   const selesai = Math.max(...hadir.map((s) => ps.get(s.id).selesai_at || 0));
   return {
-    ujian: uj, sekolah: one('SELECT * FROM sekolah WHERE npsn = ?', uj.npsn),
+    ujian: uj, sekolah: await one('SELECT * FROM sekolah WHERE npsn = ?', uj.npsn),
     terdaftar: sasaran.length, hadir: hadir.length, tidak_hadir: tidakHadir, insiden,
     mulai_at: isFinite(mulai) ? mulai : null, selesai_at: selesai > 0 ? selesai : null,
   };
 });
 
-route('GET', '/api/cetak/sertifikat', (ctx) => {
+route('GET', '/api/cetak/sertifikat', async (ctx) => {
   requireRole(ctx, 'superadmin', 'admin', 'guru');
   const ids = str(ctx.query.peserta).split(',').map((x) => int(x)).filter(Boolean).slice(0, 500);
   if (!ids.length) throw httpError(400, 'Pilih peserta.');
-  const rows = all(`SELECT pu.id, pu.nilai, pu.selesai_at, p.nama, p.username, p.kelas, uj.npsn, uj.mapel, uj.kategori, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah
+  const rows = await all(`SELECT pu.id, pu.nilai, pu.selesai_at, p.nama, p.username, p.kelas, uj.npsn, uj.mapel, uj.kategori, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah
     FROM peserta_ujian pu JOIN pengguna p ON p.id = pu.siswa_id JOIN ujian uj ON uj.id = pu.ujian_id JOIN mapel m ON m.kode = uj.mapel
     JOIN kategori k ON k.kode = uj.kategori JOIN sekolah s ON s.npsn = uj.npsn WHERE pu.id IN (${ids.join(',')}) AND pu.nilai IS NOT NULL`);
   const cache = new Map();
-  const out = rows.map((r) => {
+  const out = [];
+  for (const r of rows) {
     assertSekolahAccess(ctx, r.npsn);
     const key = `${r.npsn}|${r.mapel}|${r.kategori}`;
-    if (!cache.has(key)) cache.set(key, analisis({ ...ctx, user: { ...ctx.user, peran: 'superadmin' } }, { npsn: r.npsn, mapel: r.mapel, kategori: r.kategori }).ranking);
+    if (!cache.has(key)) cache.set(key, (await analisis({ ...ctx, user: { ...ctx.user, peran: 'superadmin' } }, { npsn: r.npsn, mapel: r.mapel, kategori: r.kategori })).ranking);
     const rk = cache.get(key);
     const me = rk.find((x) => x.id === r.id);
-    return { ...r, peringkat: me?.peringkat ?? null, dari: rk.filter((x) => x.nilai != null).length, predikat: predikat(r.nilai), kode: kodeVerifikasi(r.id) };
-  });
-  const sekolah = out.length ? one('SELECT * FROM sekolah WHERE npsn = ?', out[0].npsn) : null;
+    out.push({ ...r, peringkat: me?.peringkat ?? null, dari: rk.filter((x) => x.nilai != null).length, predikat: predikat(r.nilai), kode: kodeVerifikasi(r.id) });
+  }
+  const sekolah = out.length ? await one('SELECT * FROM sekolah WHERE npsn = ?', out[0].npsn) : null;
   return { sekolah, items: out.sort((a, b) => a.kelas?.localeCompare(b.kelas) || a.nama.localeCompare(b.nama)) };
 });
 
-route('GET', '/api/public/verifikasi/:kode', (ctx) => {
+route('GET', '/api/public/verifikasi/:kode', async (ctx) => {
   const pid = cekKodeVerifikasi(ctx.params.kode);
-  const r = pid && one(`SELECT pu.nilai, pu.selesai_at, p.nama, p.username, p.kelas, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah, s.npsn
+  const r = pid && await one(`SELECT pu.nilai, pu.selesai_at, p.nama, p.username, p.kelas, m.nama AS mapel_nama, k.nama AS kategori_nama, s.nama AS sekolah, s.npsn
     FROM peserta_ujian pu JOIN pengguna p ON p.id = pu.siswa_id JOIN ujian uj ON uj.id = pu.ujian_id JOIN mapel m ON m.kode = uj.mapel
     JOIN kategori k ON k.kode = uj.kategori JOIN sekolah s ON s.npsn = uj.npsn WHERE pu.id = ? AND pu.nilai IS NOT NULL`, pid);
   if (!r) throw httpError(404, 'Kode verifikasi tidak dikenal.');
@@ -280,17 +285,17 @@ route('GET', '/api/public/verifikasi/:kode', (ctx) => {
 
 // ---------- hasil akumulatif semua mata pelajaran ----------
 /** Gabungkan nilai tiap siswa dari semua mapel pada satu kategori ujian. */
-function akumulatif(ctx, q) {
+async function akumulatif(ctx, q) {
   const kategori = str(q.kategori);
   const npsnScope = scopeNpsn(ctx, q.npsn);
   if (npsnScope === '-') throw httpError(403, 'Akun ini tidak terhubung ke sekolah.');
-  const batas = targetCapaian(npsnScope);
-  const mapel = all(`SELECT DISTINCT m.kode, m.nama, m.urutan FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id JOIN mapel m ON m.kode = uj.mapel
-    WHERE pu.status = 'selesai' AND uj.kategori = ? AND (? IS NULL OR uj.npsn = ?) ORDER BY m.urutan, m.nama`, kategori, npsnScope, npsnScope);
+  const batas = await targetCapaian(npsnScope);
+  const mapel = await all(`SELECT DISTINCT m.kode, m.nama, m.urutan FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id JOIN mapel m ON m.kode = uj.mapel
+    WHERE pu.status = 'selesai' AND uj.kategori = ? AND (?::text IS NULL OR uj.npsn = ?) ORDER BY m.urutan, m.nama`, kategori, npsnScope, npsnScope);
   const siswa = new Map();
   const perMapel = [];
   for (const m of mapel) {
-    const a = analisis(ctx, { ...q, mapel: m.kode, kategori });
+    const a = await analisis(ctx, { ...q, mapel: m.kode, kategori });
     perMapel.push({ kode: m.kode, nama: m.nama, ...a.ringkasan });
     for (const p of a.ranking) {
       const s = siswa.get(p.siswa_id) || {
@@ -333,7 +338,7 @@ function akumulatif(ctx, q) {
   })).sort((a, b) => b.rata - a.rata);
   grup.forEach((x, i) => { x.peringkat = i + 1; });
   return {
-    akumulatif: true, target: batas, kategori: one('SELECT * FROM kategori WHERE kode = ?', kategori), mapel,
+    akumulatif: true, target: batas, kategori: await one('SELECT * FROM kategori WHERE kode = ?', kategori), mapel,
     per_mapel: perMapel,
     ringkasan: { peserta: rows.length, lengkap: urut.length, belum_lengkap: sisa.length, sekolah: new Set(rows.map((r) => r.npsn)).size, ...statistik(urut.map((r) => r.rata), batas) },
     distribusi, ranking: [...urut, ...sisa], grup: { level, items: grup },
@@ -341,17 +346,17 @@ function akumulatif(ctx, q) {
 }
 
 route('GET', '/api/akumulatif', (ctx) => {
-  requireRole(ctx, 'superadmin', 'supervisor', 'admin', 'guru');
+  requireRole(ctx, 'superadmin', 'admin', 'guru');
   if (!str(ctx.query.kategori)) throw httpError(400, 'Pilih kategori ujian.');
   return akumulatif(ctx, ctx.query);
 });
 
 // ---------- rekap & analisis semua try out ----------
 /** Perkembangan nilai tiap siswa lintas kategori ujian (try out): rata-rata per try out, tren awal → akhir. */
-function rekapTryout(ctx, q) {
+async function rekapTryout(ctx, q) {
   const npsn = scopeNpsn(ctx, q.npsn);
   if (npsn === '-') throw httpError(403, 'Akun ini tidak terhubung ke sekolah.');
-  const batas = targetCapaian(npsn);
+  const batas = await targetCapaian(npsn);
   const where = [`pu.status = 'selesai'`];
   const args = [];
   const add = (cond, val) => { if (str(val)) { where.push(cond); args.push(str(val)); } };
@@ -363,7 +368,7 @@ function rekapTryout(ctx, q) {
   add('p.kelas = ?', q.kelas);
   add('p.id = ?', q.siswa);
   if (ctx.user.peran === 'guru' && ctx.user.kelas && !str(q.kelas)) add('p.kelas = ?', ctx.user.kelas);
-  const rows = all(`SELECT pu.nilai, pu.selesai_at, uj.mapel, uj.kategori,
+  const rows = await all(`SELECT pu.nilai, pu.selesai_at, uj.mapel, uj.kategori,
       p.id AS siswa_id, p.nama, p.username, p.kelas, p.jk,
       s.npsn, s.nama AS sekolah, s.provinsi_kode, s.provinsi, s.kabkota_kode, s.kabkota, s.kecamatan, s.kelurahan
     FROM peserta_ujian pu JOIN ujian uj ON uj.id = pu.ujian_id JOIN pengguna p ON p.id = pu.siswa_id JOIN sekolah s ON s.npsn = uj.npsn
@@ -372,12 +377,12 @@ function rekapTryout(ctx, q) {
   for (const r of rows) terakhir.set(`${r.siswa_id}|${r.mapel}|${r.kategori}`, r);
   const hasil = [...terakhir.values()];
 
-  const katUrut = all('SELECT kode, nama, urutan FROM kategori ORDER BY urutan, nama');
+  const katUrut = await all('SELECT kode, nama, urutan FROM kategori ORDER BY urutan, nama');
   const tersedia = katUrut.filter((k) => hasil.some((r) => r.kategori === k.kode));
   const dipilih = str(q.kategori) ? str(q.kategori).split(',').filter(Boolean) : null;
   const kategori = dipilih ? tersedia.filter((k) => dipilih.includes(k.kode)) : tersedia;
   const kSet = new Set(kategori.map((k) => k.kode));
-  const mapel = all('SELECT kode, nama FROM mapel ORDER BY urutan, nama').filter((m) => hasil.some((r) => r.mapel === m.kode && kSet.has(r.kategori)));
+  const mapel = (await all('SELECT kode, nama FROM mapel ORDER BY urutan, nama')).filter((m) => hasil.some((r) => r.mapel === m.kode && kSet.has(r.kategori)));
 
   // susun per siswa
   const siswa = new Map();
@@ -451,7 +456,7 @@ function rekapTryout(ctx, q) {
 }
 
 route('GET', '/api/rekap-tryout', (ctx) => {
-  requireRole(ctx, 'superadmin', 'supervisor', 'admin', 'guru');
+  requireRole(ctx, 'superadmin', 'admin', 'guru');
   return rekapTryout(ctx, ctx.query);
 });
 
@@ -460,8 +465,8 @@ route('GET', '/api/rekap-tryout', (ctx) => {
  * Capaian CBT satu sekolah dibandingkan kab/kota, provinsi, dan nasional.
  * Data wilayah hanya dikirim sebagai angka gabungan (rata-rata, peringkat) — tanpa nama siswa/sekolah lain.
  */
-function profil360(ctx, npsn) {
-  const sekolah = one(`SELECT s.*,
+async function profil360(ctx, npsn) {
+  const sekolah = await one(`SELECT s.*,
       (SELECT COUNT(*) FROM pengguna p WHERE p.npsn = s.npsn AND p.peran = 'siswa') AS jml_siswa,
       (SELECT COUNT(*) FROM pengguna p WHERE p.npsn = s.npsn AND p.peran = 'guru') AS jml_guru,
       (SELECT COUNT(DISTINCT kelas) FROM pengguna p WHERE p.npsn = s.npsn AND p.peran = 'siswa' AND kelas IS NOT NULL) AS jml_kelas,
@@ -469,9 +474,9 @@ function profil360(ctx, npsn) {
     FROM sekolah s WHERE s.npsn = ?`, npsn);
   if (!sekolah) throw httpError(404, 'Sekolah tidak ditemukan.');
   const pusat = { ...ctx, user: { ...ctx.user, peran: 'superadmin' } };
-  const sk = rekapTryout(pusat, { npsn, grup: 'kelas' });
+  const sk = await rekapTryout(pusat, { npsn, grup: 'kelas' });
   const target = sk.target;
-  const terdaftar = all(`SELECT kelas, jk, COUNT(*) AS n FROM pengguna WHERE peran = 'siswa' AND npsn = ? GROUP BY kelas, jk`, npsn);
+  const terdaftar = await all(`SELECT kelas, jk, COUNT(*) AS n FROM pengguna WHERE peran = 'siswa' AND npsn = ? GROUP BY kelas, jk`, npsn);
   const dasar = { sekolah, target, terdaftar, ada: sk.siswa.length > 0 };
   if (!dasar.ada) return dasar;
 
@@ -479,34 +484,36 @@ function profil360(ctx, npsn) {
   const avg = (a) => { const v = a.filter((x) => x != null); return v.length ? r1(v.reduce((p, c) => p + c, 0) / v.length) : null; };
   const perMapel = (daftar) => Object.fromEntries(sk.mapel.map((m) => [m.kode, avg(daftar.map((s) => s.per_mapel?.[m.kode]))]));
   // wilayah pembanding: hanya try out yang diikuti sekolah ini agar adil
-  const wilayah = [
+  const wilayah = [];
+  for (const [level, q, nama] of [
     ['kabkota', sekolah.kabkota_kode && { kabkota: sekolah.kabkota_kode }, sekolah.kabkota],
     ['provinsi', sekolah.provinsi_kode && { provinsi: sekolah.provinsi_kode }, sekolah.provinsi],
     ['nasional', {}, 'Nasional'],
-  ].filter(([, q]) => q).map(([level, q, nama]) => {
-    const w = rekapTryout(pusat, { ...q, kategori: kodeKat, grup: 'sekolah' });
+  ].filter(([, q]) => q)) {
+    const w = await rekapTryout(pusat, { ...q, kategori: kodeKat, grup: 'sekolah' });
     const urut = w.grup.items;
     const posisi = urut.findIndex((x) => x.kunci === npsn);
-    return {
+    wilayah.push({
       level, nama, sekolah: urut.length, siswa: w.ringkasan.siswa, rata: w.ringkasan.rata, median: w.ringkasan.median, persen_tuntas: w.ringkasan.persen_tuntas,
       peringkat: posisi >= 0 ? posisi + 1 : null,
       per_tryout: Object.fromEntries(w.per_tryout.map((t) => [t.kode, t.rata])),
       per_mapel: perMapel(w.siswa),
-    };
-  });
+    });
+  }
 
   // butir tersulit pada try out terakhir yang diikuti, dibanding persentase benar nasional untuk soal yang sama
   const akhir = sk.kategori[sk.kategori.length - 1];
-  const butir = sk.mapel.filter((m) => sk.siswa.some((s) => s.tryout[akhir.kode]?.nilai[m.kode] != null)).map((m) => {
-    const a = analisis(pusat, { npsn, mapel: m.kode, kategori: akhir.kode });
-    const nas = new Map(analisis(pusat, { mapel: m.kode, kategori: akhir.kode }).butir.map((b) => [b.soal_id, b.persen_benar]));
+  const butir = [];
+  for (const m of sk.mapel.filter((m) => sk.siswa.some((s) => s.tryout[akhir.kode]?.nilai[m.kode] != null))) {
+    const a = await analisis(pusat, { npsn, mapel: m.kode, kategori: akhir.kode });
+    const nas = new Map((await analisis(pusat, { mapel: m.kode, kategori: akhir.kode })).butir.map((b) => [b.soal_id, b.persen_benar]));
     const hitung = (k) => a.butir.filter((b) => b.kesukaran === k).length;
-    return {
+    butir.push({
       kode: m.kode, nama: m.nama, rata: a.ringkasan.rata, jumlah: a.butir.length,
       tingkat: { sulit: hitung('Sulit'), sedang: hitung('Sedang'), mudah: hitung('Mudah') },
       tersulit: a.butir.filter((b) => b.p != null).slice(0, 5).map((b) => ({ nomor: b.nomor, tipe: b.tipe, cuplikan: b.cuplikan, persen_benar: b.persen_benar, nasional: nas.get(b.soal_id) ?? null })),
-    };
-  });
+    });
+  }
 
   return {
     ...dasar,
@@ -523,7 +530,7 @@ function profil360(ctx, npsn) {
 }
 
 route('GET', '/api/profil360', (ctx) => {
-  requireRole(ctx, 'superadmin', 'supervisor', 'admin');
+  requireRole(ctx, 'superadmin', 'admin');
   const npsn = scopeNpsn(ctx, ctx.query.npsn);
   if (!npsn || npsn === '-') throw httpError(400, 'Pilih sekolah.');
   return profil360(ctx, npsn);
