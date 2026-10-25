@@ -2,7 +2,7 @@ import { html, useState, useEffect, fmt, cls, PERAN_LABEL } from '../lib.js';
 import { Icon } from '../icons.js';
 import { session, get, post, put, del } from '../api.js';
 import { openPrint } from '../router.js';
-import { Loading, ErrorBox, Empty, Chip, Switch, Modal, Field, toast, toastErr, confirmDialog, promptDialog, useAsync, useDebounced, PageHead, Pager, Avatar } from '../ui.js';
+import { Loading, ErrorBox, Empty, Chip, Switch, Modal, Field, toast, toastErr, confirmDialog, promptDialog, useAsync, useDebounced, PageHead, Pager, Avatar, Hitung } from '../ui.js';
 import { templateImpor, bacaImpor, KOLOM_IMPOR } from '../excel.js';
 import { useLive } from './ujian.js';
 
@@ -15,15 +15,17 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
   useEffect(() => setP(peran), [peran]);
   const [f, setF] = useState({ q: '', kelas: '', sesi: '', aktif: '', npsn: npsn || '' });
   const [hal, setHal] = useState(1);
+  const [per, setPer] = useState(25);
   const dq = useDebounced(f.q, 300);
-  const { data, error, loading, reload } = useAsync(() => get('pengguna', { peran: p, npsn: f.npsn, kelas: f.kelas, sesi: f.sesi, aktif: f.aktif, q: dq, halaman: hal, per: 25 }), [p, f.npsn, f.kelas, f.sesi, f.aktif, dq, hal]);
+  const { data, error, loading, reload } = useAsync(() => get('pengguna', { peran: p, npsn: f.npsn, kelas: f.kelas, sesi: f.sesi, aktif: f.aktif, q: dq, halaman: hal, per }), [p, f.npsn, f.kelas, f.sesi, f.aktif, dq, hal, per]);
+  const ringkas = useAsync(() => (['siswa', 'guru'].includes(p) ? get('pengguna/ringkasan', { peran: p, npsn: f.npsn }) : Promise.resolve(null)), [p, f.npsn, data?.total]);
   useLive(p === 'siswa' ? f.npsn || npsn || session.user.npsn : null, () => p === 'siswa' && reload(true));
   const opsiKelas = useAsync(() => get('pengguna/kelas', { npsn: f.npsn }), [f.npsn, data?.total]);
   const sekolahList = useAsync(() => (npsn ? Promise.resolve([]) : get('sekolah')), [npsn]);
   const [pilih, setPilih] = useState(new Set());
   const [form, setForm] = useState(null);
   const [impor, setImpor] = useState(false);
-  useEffect(() => { setPilih(new Set()); setHal(1); }, [p, f.npsn, f.kelas, f.sesi, f.aktif, dq]);
+  useEffect(() => { setPilih(new Set()); setHal(1); }, [p, f.npsn, f.kelas, f.sesi, f.aktif, dq, per]);
   const items = data?.items || [];
   const set = (x) => setF({ ...f, ...x });
   const siswa = p === 'siswa';
@@ -50,6 +52,20 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
       <button class="btn btn-p" onClick=${() => setForm({})}><${Icon} n="plus" s=${18} />Tambah ${PERAN_LABEL[p]}</button>
     <//>
     ${pilihPeran && html`<div class="seg" role="tablist">${['admin', 'guru', 'siswa'].map((x) => html`<button class=${p === x ? 'on' : ''} onClick=${() => { setP(x); setF({ ...f, kelas: '', sesi: '' }); }}>${PERAN_LABEL[x]}</button>`)}</div>`}
+    ${ringkas.data && html`<${Hitung} label=${`Jumlah ${PERAN_LABEL[p].toLowerCase()}`} items=${[
+      { label: `Total ${PERAN_LABEL[p].toLowerCase()}`, value: fmt.bulat(ringkas.data.total), onClick: () => set({ aktif: '', kelas: '', sesi: '' }), on: !f.aktif && !f.kelas && !f.sesi },
+      siswa && { label: 'Laki-laki', value: fmt.bulat(ringkas.data.l) },
+      siswa && { label: 'Perempuan', value: fmt.bulat(ringkas.data.p) },
+      { label: 'Aktif', value: fmt.bulat(ringkas.data.aktif), onClick: () => set({ aktif: '1' }), on: f.aktif === '1' },
+      { label: 'Nonaktif', value: fmt.bulat(ringkas.data.nonaktif), onClick: () => set({ aktif: '0' }), on: f.aktif === '0' },
+      siswa && { label: 'Online sekarang', value: fmt.bulat(ringkas.data.online) },
+      siswa && { label: 'Akun terkunci', value: fmt.bulat(ringkas.data.terkunci) },
+      siswa && { label: 'Belum ganti password', value: fmt.bulat(ringkas.data.password_awal) },
+    ]} />`}
+    ${siswa && ringkas.data?.per_kelas?.length > 0 && html`<div class="col" style="gap:6px"><span class="tiny muted">Jumlah per kelas (klik untuk menyaring)</span>
+      <div class="hitung-baris">${ringkas.data.per_kelas.map((k) => html`<button class=${f.kelas === k.kelas ? 'on' : ''} aria-pressed=${f.kelas === k.kelas}
+        onClick=${() => set({ kelas: f.kelas === k.kelas ? '' : k.kelas })} title=${`L ${k.l} · P ${k.p}`}>Kelas ${k.kelas || '–'} <b>${k.n}</b></button>`)}
+        ${ringkas.data.per_sesi.map((x) => html`<button class=${f.sesi === x.sesi ? 'on' : ''} aria-pressed=${f.sesi === x.sesi} onClick=${() => set({ sesi: f.sesi === x.sesi ? '' : x.sesi })}>${x.sesi || 'Tanpa sesi'} <b>${x.n}</b></button>`)}</div></div>`}
     <div class="row wrap" style="gap:20px;align-items:flex-start">
       <section class="card col" style="flex:999 1 620px;min-width:0;gap:0">
         <div class="row wrap" style="padding:16px;gap:10px;border-bottom:1px solid var(--line)">
@@ -59,6 +75,7 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
           ${(siswa || p === 'guru') && html`<select class="select" style="width:auto" aria-label="Kelas" value=${f.kelas} onChange=${(e) => set({ kelas: e.target.value })}><option value="">Semua kelas</option>${(opsiKelas.data?.kelas || []).map((k) => html`<option>${k}</option>`)}</select>`}
           ${siswa && html`<select class="select" style="width:auto" aria-label="Sesi" value=${f.sesi} onChange=${(e) => set({ sesi: e.target.value })}><option value="">Semua sesi</option>${(opsiKelas.data?.sesi || []).map((k) => html`<option>${k}</option>`)}</select>`}
           <select class="select" style="width:auto" aria-label="Status" value=${f.aktif} onChange=${(e) => set({ aktif: e.target.value })}><option value="">Semua status</option><option value="1">Aktif</option><option value="0">Nonaktif</option></select>
+          ${siswa && (f.npsn || npsn) && html`<button class="btn btn-o" title="Cetak kartu peserta sesuai saringan kelas" onClick=${() => openPrint('/cetak/kartu', { npsn: f.npsn || npsn, kelas: f.kelas })}><${Icon} n="idcard" s=${18} />Cetak kartu${f.kelas ? ` kelas ${f.kelas}` : ''}</button>`}
         </div>
         ${pilih.size > 0 && html`<div class="row wrap gap-8" style="padding:10px 16px;background:var(--sky-50);border-bottom:1px solid var(--line)">
           <strong class="small" style="color:var(--sky-700);margin-right:auto">${pilih.size} dipilih</strong>
@@ -74,15 +91,16 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
         ${loading && !data ? html`<${Loading} />` : error ? html`<div style="padding:16px"><${ErrorBox} error=${error} retry=${reload} /></div>` : html`
         <div class="table-wrap"><table class="tbl">
           <thead><tr><th style="width:44px"><input type="checkbox" aria-label="Pilih semua di halaman ini" checked=${semuaDipilih} onChange=${(e) => { const n = new Set(pilih); items.forEach((u) => (e.target.checked ? n.add(u.id) : n.delete(u.id))); setPilih(n); }} /></th>
-            <th>${siswa ? 'No. Peserta' : 'Username'}</th><th>Nama</th>
+            <th class="no">No</th><th>${siswa ? 'No. Peserta' : 'Username'}</th><th>Nama</th>
             ${siswa && html`<th class="c">L/P</th><th>Kelas</th><th>Sesi</th><th>Login</th>`}
             ${p === 'guru' && html`<th>Kelas</th><th class="c">Monitor</th>`}
             ${kolSekolah && html`<th>Sekolah</th>`}
             <th>Aktif</th><th class="r">Aksi</th></tr></thead>
           <tbody>
-            ${items.length === 0 && html`<tr><td colspan="10"><${Empty} icon="users" title="Belum ada data">Tambah satu per satu atau impor dari Excel.<//></td></tr>`}
-            ${items.map((u) => html`<tr class=${pilih.has(u.id) ? 'sel' : ''}>
+            ${items.length === 0 && html`<tr><td colspan="11"><${Empty} icon="users" title="Belum ada data">Tambah satu per satu atau impor dari Excel.<//></td></tr>`}
+            ${items.map((u, i) => html`<tr class=${pilih.has(u.id) ? 'sel' : ''}>
               <td><input type="checkbox" aria-label=${`Pilih ${u.nama}`} checked=${pilih.has(u.id)} onChange=${(e) => { const n = new Set(pilih); e.target.checked ? n.add(u.id) : n.delete(u.id); setPilih(n); }} /></td>
+              <td class="no">${(hal - 1) * per + i + 1}</td>
               <td class="num">${u.username}</td><td class="strong">${u.nama}</td>
               ${siswa && html`<td class="c">${u.jk || '–'}</td><td>${u.kelas || '–'}</td><td>${u.sesi || '–'}</td>
                 <td>${u.terkunci ? html`<button class="chip red" style="border:0;cursor:pointer" title="Klik untuk reset login" onClick=${() => satu.login(u)}><${Icon} n="lock" s=${12} />Terkunci · reset</button>` : u.online ? html`<${Chip} c="green"><span class="dot"></span>Online<//>` : u.sedang_login ? html`<button class="chip amber" style="border:0;cursor:pointer" title="Klik untuk reset login" onClick=${() => satu.login(u)}>Tersimpan · reset</button>` : html`<${Chip}>Offline<//>`}</td>`}
@@ -96,7 +114,8 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
               </span></td>
             </tr>`)}
           </tbody></table></div>
-        <div class="tbl-foot"><${Pager} halaman=${hal} per=${25} total=${data.total} onChange=${setHal} /></div>`}
+        <div class="tbl-foot"><${Pager} halaman=${hal} per=${per} total=${data.total} onChange=${setHal} />
+          <label class="row small muted" style="gap:6px">Baris per halaman <select class="select" style="width:auto;min-height:32px" value=${per} onChange=${(e) => setPer(+e.target.value)}>${[25, 50, 100, 250].map((n) => html`<option value=${n}>${n}</option>`)}</select></label></div>`}
       </section>
       ${impor && html`<${PanelImpor} peran=${p} npsn=${npsn || f.npsn} kelas=${opsiKelas.data} onClose=${() => setImpor(false)} onDone=${() => reload()} />`}
     </div>

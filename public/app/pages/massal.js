@@ -76,8 +76,9 @@ function DetailMassal({ id }) {
         html`<div class="col" style="gap:0"><span class="tiny muted">${l}</span><strong style="font-size:20px">${fmt.bulat(v)}</strong></div>`)}
     </div>
     <div class="table-wrap"><table class="tbl">
-      <thead><tr><th>Sekolah</th><th>Wilayah</th><th>Token</th><th class="r">Peserta</th><th style="min-width:160px">Selesai</th><th class="r">Online</th><th class="r">Belum</th><th class="r">Terkunci</th><th class="r">Aksi</th></tr></thead>
-      <tbody>${list.map((s) => html`<tr class=${s.terkunci ? 'warn' : ''}>
+      <thead><tr><th class="no">No</th><th>Sekolah</th><th>Wilayah</th><th>Token</th><th class="r">Peserta</th><th style="min-width:160px">Selesai</th><th class="r">Online</th><th class="r">Belum</th><th class="r">Terkunci</th><th class="r">Aksi</th></tr></thead>
+      <tbody>${list.map((s, i) => html`<tr class=${s.terkunci ? 'warn' : ''}>
+        <td class="no">${i + 1}</td>
         <td><span class="col" style="gap:0"><strong class="strong">${s.nama}</strong><span class="tiny muted">${s.npsn}</span></span></td>
         <td class="tiny muted">${[s.kecamatan, s.kabkota].filter(Boolean).join(', ') || '–'}</td>
         <td class="num" style="font-weight:700;letter-spacing:.08em">${s.token || '–'}</td>

@@ -162,17 +162,18 @@ export function Monitor({ id, onChange }) {
     </div>
     <div class="row wrap gap-8" style="padding:14px 20px;border-bottom:1px solid var(--line)">
       ${[['semua', `Semua · ${r.total}`], ['online', `Online · ${r.online}`], ['mengerjakan', `Mengerjakan · ${r.mengerjakan}`], ['selesai', `Selesai · ${r.selesai}`], ['belum', `Belum mulai · ${r.belum}`], ['absen', `Tidak hadir · ${r.absen}`]].map(([k, l]) =>
-        html`<button class=${cls('btn btn-sm', filter === k ? '' : 'btn-o')} style=${filter === k ? 'background:var(--ink);color:#fff' : ''} onClick=${() => setFilter(k)}>${l}</button>`)}
-      ${r.perhatian > 0 && html`<button class="btn btn-sm" style="background:var(--amber-100);color:var(--amber-800)" onClick=${() => setFilter('perhatian')}><${Icon} n="alert" s=${14} />Perlu perhatian · ${r.perhatian}</button>`}
+        html`<button class=${cls('btn btn-sm', filter === k ? 'btn-p' : 'btn-o')} aria-pressed=${filter === k} onClick=${() => setFilter(k)}>${l}</button>`)}
+      ${r.perhatian > 0 && html`<button class="btn btn-w btn-sm" onClick=${() => setFilter('perhatian')}><${Icon} n="alert" s=${14} />Perlu perhatian · ${r.perhatian}</button>`}
       ${r.terkunci > 0 && html`<span class="chip red" style="align-self:center"><${Icon} n="lock" s=${12} />${r.terkunci} terkunci — perlu reset login</span>`}
     </div>
     <div class="table-wrap"><table class="tbl">
-      <thead><tr><th>Peserta</th><th>Kelas</th><th>Koneksi</th><th>Status</th><th style="min-width:170px">Progres</th><th class="c">Ragu</th><th>Sisa / Selesai</th><th class="r">Aksi</th></tr></thead>
+      <thead><tr><th class="no">No</th><th>Peserta</th><th>Kelas</th><th>Koneksi</th><th>Status</th><th style="min-width:170px">Progres</th><th class="c">Ragu</th><th>Sisa / Selesai</th><th class="r">Aksi</th></tr></thead>
       <tbody>
-        ${rows.length === 0 && html`<tr><td colspan="8"><${Empty} icon="users" title="Tidak ada peserta pada filter ini" /></td></tr>`}
-        ${rows.map((p) => {
+        ${rows.length === 0 && html`<tr><td colspan="9"><${Empty} icon="users" title="Tidak ada peserta pada filter ini" /></td></tr>`}
+        ${rows.map((p, i) => {
           const sisaLokal = p.sisa == null ? null : p.berjalan ? Math.max(0, p.sisa - umur) : p.sisa;
           return html`<tr class=${p.status === 'terkunci' || p.perhatian ? 'warn' : ''}>
+          <td class="no">${i + 1}</td>
           <td><span class="col" style="gap:0"><strong>${p.nama}</strong><span class="tiny muted">${p.username}</span></span></td>
           <td>${p.kelas}</td>
           <td>${p.online ? html`<${Chip} c="green"><span class="dot" style="background:var(--green-500)"></span>Online<//>`
