@@ -1,11 +1,33 @@
 import { loadScript, unduhBlob, fmt } from './lib.js';
+import { session } from './api.js';
 
 async function XL() {
   await loadScript('/vendor/exceljs.min.js');
   return window.ExcelJS;
 }
 
-const C = { title: 'FF1F6BE0', head: 'FFCFEAFF', sub: 'FFE3F2FF', note: 'FFFEF3C7', ex: 'FFF8FAFC', navy: 'FF10284A', line: 'FF94A3B8', warn: 'FFFEF3C7', soft: 'FFF0F7FF' };
+// palet sama dengan aplikasi: judul navy, kepala tabel biru muda, catatan kuning
+const C = { title: 'FF0F2A4F', head: 'FFE6EEFB', sub: 'FFF4F7FC', note: 'FFFFF9EB', ex: 'FFF7F9FB', navy: 'FF0F2A4F', line: 'FFB5C0CE', warn: 'FFFDEFC8', soft: 'FFF2F6FD' };
+const APP = () => session.info?.nama_aplikasi || 'TKA SD 2026';
+const tglFile = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
+
+/** Pengaturan cetak lembar kerja: A4, pas selebar halaman, judul kolom berulang, nomor halaman. */
+function siapCetak(ws, { land = false, ulang } = {}) {
+  ws.pageSetup = { ...ws.pageSetup, paperSize: 9, orientation: land ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+    margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.6, header: 0.2, footer: 0.25 }, ...(ulang ? { printTitlesRow: ulang } : {}) };
+  ws.headerFooter = { oddFooter: `&L&8${APP()} · diunduh ${fmt.tanggal(Date.now())}&R&8Halaman &P dari &N` };
+}
+
+/** Ambil gambar (logo/tanda tangan/stempel) dari URL unggahan untuk disisipkan ke Excel. */
+async function gambar(wb, url) {
+  if (!url) return null;
+  try {
+    const blob = await (await fetch(url)).blob();
+    const b64 = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+    return wb.addImage({ base64: b64, extension: /png/.test(blob.type) ? 'png' : /gif/.test(blob.type) ? 'gif' : 'jpeg' });
+  } catch { return null; }
+}
+const kotaTtd = (s) => s?.kota_ttd || (s?.kabkota || '').replace(/^(Kota Administrasi|Kabupaten Administrasi|Kabupaten|Kota)\s+/, '') || '[Kota]';
 const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
 const border = { top: { style: 'thin', color: { argb: C.line } }, left: { style: 'thin', color: { argb: C.line } }, bottom: { style: 'thin', color: { argb: C.line } }, right: { style: 'thin', color: { argb: C.line } } };
 const FONT = 'Calibri';
@@ -82,13 +104,13 @@ export const KOLOM_IMPOR = {
 export async function templateImpor(peran, { sekolah, kelas = [], sesi = [] } = {}) {
   const ExcelJS = await XL();
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'TKA 2026';
+  wb.creator = APP();
   const kol = KOLOM_IMPOR[peran];
   const n = kol.length + 1;
   const ws = wb.addWorksheet(peran === 'siswa' ? 'Data Siswa' : `Data ${peran[0].toUpperCase()}${peran.slice(1)}`, { views: [{ state: 'frozen', ySplit: 5 }] });
-  judul(ws, 1, `TEMPLATE IMPOR DATA ${peran.toUpperCase()} · TKA SD 2026`, n);
+  judul(ws, 1, `TEMPLATE IMPOR DATA ${peran.toUpperCase()} · ${APP().toUpperCase()}`, n);
   judul(ws, 2, sekolah ? `Sekolah: ${sekolah.nama} · NPSN ${sekolah.npsn}` : 'Berlaku untuk semua sekolah', n, { argb: C.sub, size: 11 });
-  judul(ws, 3, 'Isi mulai baris 7 · Jangan ubah judul kolom (baris 5) · Kolom bertanda * wajib · Baris "contoh" boleh dihapus', n, { argb: C.note, bold: false, size: 11, color: 'FF78350F' });
+  judul(ws, 3, 'Isi mulai baris 7 · Jangan ubah judul kolom (baris 5) · Kolom bertanda * wajib · Baris "contoh" boleh dihapus · Lihat lembar Petunjuk', n, { argb: C.note, bold: false, size: 11, color: 'FF6B3A08' });
   header(ws, 5, ['No', ...kol.map((k) => k[1])]);
   const contoh = {
     siswa: ['contoh', '010045001', 'Aisyah Putri Ramadhani', '', 'P', kelas[0] || '6A', 'Sesi 1', '', '12/05/2014'],
@@ -106,9 +128,12 @@ export async function templateImpor(peran, { sekolah, kelas = [], sesi = [] } = 
       if (key === 'jk') cell.dataValidation = { type: 'list', allowBlank: true, formulae: ['"L,P"'], showErrorMessage: true, errorTitle: 'L/P', error: 'Isi L atau P.' };
       if (key === 'sesi') cell.dataValidation = { type: 'list', allowBlank: true, formulae: ['=Daftar!$B$2:$B$11'], showErrorMessage: false };
       if (key === 'kelas' && peran === 'siswa') cell.dataValidation = { type: 'list', allowBlank: true, formulae: ['=Daftar!$A$2:$A$61'], showErrorMessage: false };
+      if (key === 'nik') cell.dataValidation = { type: 'textLength', operator: 'equal', allowBlank: true, formulae: [16], showErrorMessage: true, errorTitle: 'NIK', error: 'NIK harus 16 digit.' };
+      if (key === 'npsn') cell.dataValidation = { type: 'textLength', operator: 'equal', allowBlank: true, formulae: [8], showErrorMessage: true, errorTitle: 'NPSN', error: 'NPSN harus 8 digit.' };
     });
   }
   ws.columns = [{ width: 8 }, ...kol.map(([key]) => ({ width: { nama: 34, username: 18, password: 16, jk: 7, kelas: 10, sesi: 12, nik: 22, tgl_lahir: 16, npsn: 14, nip: 22 }[key] || 16 }))];
+  siapCetak(ws, { land: kol.length > 6, ulang: '5:5' });
 
   const pt = wb.addWorksheet('Petunjuk');
   pt.columns = [{ width: 26 }, { width: 80 }];
@@ -128,7 +153,7 @@ export async function templateImpor(peran, { sekolah, kelas = [], sesi = [] } = 
   sesiList.forEach((s, i) => { dl.getCell(i + 2, 2).value = s; });
   header(dl, 1, ['Kelas', 'Sesi']);
 
-  await simpan(wb, `Template_Impor_${peran[0].toUpperCase()}${peran.slice(1)}_TKA2026.xlsx`);
+  await simpan(wb, `Template_Impor_${peran[0].toUpperCase()}${peran.slice(1)}${sekolah ? `_${aman(sekolah.nama)}` : ''}.xlsx`);
 }
 
 const HEADER_ALIAS = {
@@ -203,7 +228,8 @@ export async function eksporHasil(a, meta) {
   });
   ws.columns = [10, 14, 32, 6, 8, 30, 14, 12, 12, 18].map((width) => ({ width }));
   ws.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6, column: cols.length } };
-  await simpan(wb, `Nilai_${aman(meta.mapel)}_${aman(meta.kategori)}_${aman(meta.file)}.xlsx`);
+  siapCetak(ws, { land: true, ulang: '6:6' });
+  await simpan(wb, `Nilai_${aman(meta.mapel)}_${aman(meta.kategori)}_${aman(meta.file)}_${tglFile()}.xlsx`);
 }
 
 export async function eksporLegger(d) {
@@ -213,7 +239,7 @@ export async function eksporLegger(d) {
     pageSetup: { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '5:6' } });
   const base = ['No', 'No. Peserta', 'Nama Lengkap', 'L/P', 'Kelas'];
   const ncol = base.length + d.mapel.length * 3 + 3;
-  judul(ws, 1, `LEGGER NILAI TES KEMAMPUAN AKADEMIK · ${d.kategori.nama.toUpperCase()}`, ncol);
+  judul(ws, 1, `LEGGER NILAI ${APP().toUpperCase()} · ${d.kategori.nama.toUpperCase()}`, ncol);
   judul(ws, 2, `${d.sekolah.nama} · NPSN ${d.sekolah.npsn} · Kelas ${d.kelas || 'Semua'}`, ncol, { argb: C.sub, size: 11 });
   judul(ws, 3, `Diunduh ${fmt.hari(Date.now())} pukul ${fmt.jam(Date.now())} · Target capaian ${d.target}`, ncol, { argb: 'FFFFFFFF', bold: false, size: 10, color: 'FF475569' });
   // isi dulu, baru gabung sel (menulis ke sel yang sudah digabung akan menimpa judulnya)
@@ -257,7 +283,7 @@ export async function eksporLegger(d) {
   });
   const tr = sr + 6;
   ws.getCell(tr, 3).value = `Wali Kelas ${d.kelas || ''},`;
-  ws.getCell(tr, ncol - 3).value = `${d.sekolah.kabkota ? d.sekolah.kabkota.replace(/^(Kota Administrasi|Kabupaten Administrasi|Kabupaten|Kota)\s+/, '') : '[Kota]'}, ${fmt.tanggal(Date.now())}`;
+  ws.getCell(tr, ncol - 3).value = `${kotaTtd(d.sekolah)}, ${fmt.tanggal(Date.now())}`;
   ws.getCell(tr + 1, ncol - 3).value = 'Kepala Sekolah,';
   ws.getCell(tr + 5, 3).value = '[Nama Wali Kelas]';
   ws.getCell(tr + 5, ncol - 3).value = d.sekolah.kepala_sekolah || '[Nama Kepala Sekolah]';
@@ -265,17 +291,14 @@ export async function eksporLegger(d) {
   ws.getCell(tr + 6, ncol - 3).value = `NIP ${d.sekolah.nip_kepsek || ''}`;
   [ws.getCell(tr + 5, 3), ws.getCell(tr + 5, ncol - 3)].forEach((c) => { c.font = { name: FONT, bold: true, underline: true }; });
   // tanda tangan kepala sekolah (bila sudah diunggah sekolah)
-  if (d.sekolah.ttd_url) {
-    try {
-      const blob = await (await fetch(d.sekolah.ttd_url)).blob();
-      const b64 = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
-      const ext = /png/.test(blob.type) ? 'png' : /gif/.test(blob.type) ? 'gif' : 'jpeg';
-      const img = wb.addImage({ base64: b64, extension: ext });
-      ws.addImage(img, { tl: { col: ncol - 4, row: tr + 1 }, ext: { width: 140, height: 56 } });
-    } catch { /* tanpa gambar tanda tangan */ }
-  }
+  // stempel & tanda tangan kepala sekolah (bila sudah diunggah sekolah)
+  const stempel = await gambar(wb, d.sekolah.stempel_url);
+  if (stempel) ws.addImage(stempel, { tl: { col: ncol - 4.6, row: tr + 0.6 }, ext: { width: 84, height: 84 } });
+  const ttd = await gambar(wb, d.sekolah.ttd_url);
+  if (ttd) ws.addImage(ttd, { tl: { col: ncol - 4, row: tr + 1 }, ext: { width: 140, height: 56 } });
   ws.columns = [6, 14, 30, 6, 8, ...d.mapel.flatMap(() => [10, 9, 9]), 11, 10, 24].map((width) => ({ width }));
-  await simpan(wb, `Legger_${aman(d.kategori.kode)}_${aman(d.kelas || 'Semua')}_${aman(d.sekolah.nama)}.xlsx`);
+  siapCetak(ws, { land: true, ulang: '5:6' });
+  await simpan(wb, `Legger_${aman(d.kategori.kode)}_${aman(d.kelas || 'Semua')}_${aman(d.sekolah.nama)}_${tglFile()}.xlsx`);
 }
 
 export async function eksporAnalisis(a, meta) {
@@ -301,6 +324,7 @@ export async function eksporAnalisis(a, meta) {
   a.butir.forEach((b, i) => dataRow(s3, 2 + i, [i + 1, b.nomor, b.tipe, b.cuplikan, b.n, b.persen_benar, b.kesukaran, b.daya_beda, b.kualitas_daya_beda, b.kunci || '',
     b.sebaran_opsi ? b.sebaran_opsi.map((o) => `${o.kode}:${o.n}`).join('  ') : ''], { numFmt: { 5: '0.0', 7: '0.00' } }));
   s3.columns = [8, 9, 20, 60, 9, 9, 11, 10, 13, 7, 26].map((width) => ({ width }));
+  [s1, s2, s3].forEach((w, i) => siapCetak(w, { land: i > 0, ulang: i ? '1:1' : undefined }));
 
   const s4 = wb.addWorksheet('Kelompok');
   header(s4, 1, ['Peringkat', 'Kelompok', 'Bagian dari', 'Sekolah', 'Peserta', 'Rata-rata', 'Median', 'Tertinggi', 'Terendah', '% Capai target']);
@@ -312,7 +336,7 @@ export async function eksporAnalisis(a, meta) {
   a.distribusi.forEach((d, i) => dataRow(s5, 2 + i, [d.label, d.n]));
   s5.columns = [{ width: 14 }, { width: 14 }];
 
-  await simpan(wb, `Analisis_${aman(meta.mapel)}_${aman(meta.kategori)}_${aman(meta.file)}.xlsx`);
+  await simpan(wb, `Analisis_${aman(meta.mapel)}_${aman(meta.kategori)}_${aman(meta.file)}_${tglFile()}.xlsx`);
 }
 
 export async function eksporAkumulatif(a, meta) {
@@ -328,6 +352,7 @@ export async function eksporAkumulatif(a, meta) {
     ...a.mapel.map((m) => p.nilai[m.kode] ?? '-'), p.jumlah, p.rata,
     !p.lengkap ? `Belum lengkap (${p.jml_mapel}/${a.mapel.length})` : p.rata >= a.target ? 'Capai target' : 'Belum capai target'], { numFmt: { [7 + a.mapel.length]: '0.0' } }));
   ws.columns = [10, 14, 30, 8, 30, 26, ...a.mapel.map(() => 12), 10, 11, 22].map((width) => ({ width }));
+  siapCetak(ws, { land: true, ulang: '5:5' });
   const s2 = wb.addWorksheet('Per Mapel');
   header(s2, 1, ['Mata pelajaran', 'Peserta', 'Rata-rata', 'Tertinggi', 'Terendah', '% Capai target']);
   a.per_mapel.forEach((m, i) => dataRow(s2, 2 + i, [m.nama, m.n, m.rata, m.maks, m.min, m.persen_tuntas]));
@@ -336,7 +361,7 @@ export async function eksporAkumulatif(a, meta) {
   header(s3, 1, ['Peringkat', 'Kelompok', 'Bagian dari', 'Siswa', 'Rata-rata gabungan', ...a.mapel.map((m) => m.nama), '% Capai target']);
   a.grup.items.forEach((g, i) => dataRow(s3, 2 + i, [g.peringkat, g.nama, g.induk, g.n, g.rata, ...a.mapel.map((m) => g.per_mapel[m.kode] ?? '-'), g.persen_tuntas]));
   s3.columns = [10, 32, 36, 8, 16, ...a.mapel.map(() => 12), 14].map((width) => ({ width }));
-  await simpan(wb, `Akumulatif_${aman(meta.kategori)}_${aman(meta.file)}.xlsx`);
+  await simpan(wb, `Akumulatif_${aman(meta.kategori)}_${aman(meta.file)}_${tglFile()}.xlsx`);
 }
 
 /** Rekap & analisis semua try out. */
@@ -356,6 +381,7 @@ export async function eksporRekapTryout(a, meta) {
   a.siswa.forEach((s, i) => dataRow(ws, 7 + i, [s.peringkat, s.username, s.nama, s.kelas, s.sekolah, s.kabkota, ...K.map((k) => s.tryout[k.kode]?.rata ?? '-'),
     s.rata, s.tren ?? '-', `${s.ikut}/${K.length}`, s.rata >= a.target ? 'Capai target' : 'Belum capai target'], { numFmt: nf }));
   ws.columns = [10, 14, 30, 8, 30, 26, ...K.map(() => 12), 11, 11, 13, 20].map((width) => ({ width }));
+  siapCetak(ws, { land: true, ulang: '6:6' });
 
   const s2 = wb.addWorksheet('Rincian per Mapel', { views: [{ state: 'frozen', xSplit: 3, ySplit: 2 }] });
   const c2 = ['No. Peserta', 'Nama', 'Kelas', 'Sekolah', ...K.flatMap((k) => M.map((m) => `${k.nama} · ${m.nama}`)), ...M.map((m) => `Rata-rata ${m.nama}`)];
@@ -373,7 +399,7 @@ export async function eksporRekapTryout(a, meta) {
   header(s4, 1, ['Peringkat', 'Kelompok', 'Bagian dari', 'Siswa', ...K.map((k) => k.nama), 'Rata-rata', 'Perubahan', '% Capai target']);
   a.grup.items.forEach((g, i) => dataRow(s4, 2 + i, [g.peringkat, g.nama, g.induk, g.n, ...K.map((k) => g.per_tryout[k.kode] ?? '-'), g.rata, g.tren ?? '-', g.persen_tuntas]));
   s4.columns = [10, 32, 36, 8, ...K.map(() => 12), 11, 11, 14].map((width) => ({ width }));
-  await simpan(wb, `Rekap_Try_Out_${aman(meta.file)}.xlsx`);
+  await simpan(wb, `Rekap_Try_Out_${aman(meta.file)}_${tglFile()}.xlsx`);
 }
 
 /** Dasbor capaian wilayah: rekap per kelompok. */
@@ -389,5 +415,6 @@ export async function eksporDasbor({ kelompok, semua, grup, target, lingkup, pak
   kelompok.forEach((g, i) => dataRow(ws, 6 + i, [i + 1, g.label, g.sub, g.sekolah, g.n, g.rata, g.median, g.maks, g.min, g.persen, ...g.predikat],
     { numFmt: { 5: '0.0', 6: '0.0', 7: '0.0', 8: '0.0', 9: '0.0' } }));
   ws.columns = [10, 32, 30, 9, 8, 10, 10, 10, 10, 13, 11, 8, 8, 14].map((width) => ({ width }));
+  siapCetak(ws, { land: true, ulang: '5:5' });
   await simpan(wb, `Dasbor_${aman(lingkup)}_${aman(grup)}.xlsx`);
 }

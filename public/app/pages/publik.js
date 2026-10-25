@@ -189,7 +189,7 @@ function CekNilai() {
 
 /** Halaman masuk. Peserta: gambar sambutan. Sekolah & guru: ringkasan capaian hasil ujian sekolah. */
 export function Login({ route }) {
-  const [f, setF] = useState({ username: '', password: '' });
+  const [f, setF] = useState({ username: route.query.u || '', password: '' });
   const [lihat, setLihat] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');

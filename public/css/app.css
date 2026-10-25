@@ -517,3 +517,6 @@ a.stat-link .card:hover { border-color: var(--line-2); }
   .card.stat { padding: 12px 14px; }
   .stat strong { font-size: 22px; }
 }
+.aksi-list a > svg:last-child { margin-left: auto; color: var(--muted); }
+.aksi-list a .ket + svg { margin-left: 10px; }
+.login-visual .logo, .pub-hero .logo { box-shadow: 0 0 0 1px rgba(255,255,255,.3); }

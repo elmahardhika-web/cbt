@@ -54,7 +54,7 @@ function Dashboard() {
       <a class="btn btn-p" href="#/admin/ujian"><${Icon} n="monitor" s=${18} />Ujian & monitor</a><//>
     ${kurang.length > 0 && html`<a href="#/admin/sekolah" class="card row" style="padding:12px 16px;border-color:#F0D7A4;background:var(--amber-50);text-decoration:none;color:var(--amber-900)">
       <${Icon} n="alert" s=${20} /><span class="grow small">Lengkapi profil sekolah: <strong>${kurang.join(', ')}</strong>. Data ini dipakai pada kartu peserta, sertifikat, dan dokumen cetak.</span><${Icon} n="chev-r" s=${18} /></a>`}
-    <section class="grid-auto" style="--min:160px">
+    <section class="grid-auto" style="--min:140px">
       <${Stat} icon="users" tone="sky" value=${fmt.bulat(d.siswa)} label="Siswa terdaftar" sub=${`${d.kelas} kelas`} href="#/admin/siswa" />
       <${Stat} icon="book" tone="orange" value=${fmt.bulat(d.guru)} label="Guru" href="#/admin/guru" />
       <${Stat} icon="calendar" tone="violet" value=${fmt.bulat(d.ujian_total)} label="Jadwal ujian" sub=${`${d.ujian_aktif} sedang dibuka`} href="#/admin/ujian" />
