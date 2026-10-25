@@ -215,7 +215,7 @@ export function useDebounced(value, ms = 300) {
 }
 
 export function Avatar({ nama, tone = 'sky', size = 38 }) {
-  const ini = String(nama || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+  const ini = String(nama || '?').replace(/\[[^\]]*\]/g, '').split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
   return html`<span class=${cls('tile round', `t-${tone}`)} style=${`width:${size}px;height:${size}px;font-size:${Math.round(size * 0.34)}px`}>${ini}</span>`;
 }
 
