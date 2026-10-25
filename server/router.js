@@ -38,7 +38,7 @@ function send(res, status, obj) {
 
 // batas umum: per akun yang masuk (siswa satu sekolah sering berbagi satu IP) dan per IP untuk akses tanpa login
 const RL_USER = Number(process.env.RL_USER || 240);   // permintaan / menit / akun
-const RL_IP = Number(process.env.RL_IP || 120);       // permintaan / menit / IP untuk API publik
+const RL_IP = Number(process.env.RL_IP || 600);       // permintaan / menit / IP tanpa login (satu lab sekolah sering berbagi IP)
 
 const ipDari = (req) => (process.env.TRUST_PROXY === '0' ? null : req.headers['x-forwarded-for']?.split(',')[0].trim()) || req.socket.remoteAddress;
 

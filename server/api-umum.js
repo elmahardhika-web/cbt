@@ -37,7 +37,7 @@ async function sesiUser(u, impersonator) {
 export const segarkanPublik = () => cacheHapus('publik:sebaran', 'publik:statistik', 'publik:capaian');
 
 // ---------- publik ----------
-route('GET', '/api/public/info', () => info(), { public: true });
+route('GET', '/api/public/info', () => info(), { public: true, noLimit: true });
 
 // sebaran sekolah pengguna untuk peta di halaman depan (hanya identitas sekolah, tanpa data siswa)
 route('GET', '/api/public/sebaran', () => cached('publik:sebaran', 120, async () => {

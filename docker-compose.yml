@@ -1,17 +1,84 @@
+# TKA SD 2026 (V3): aplikasi Node.js + PostgreSQL + PgBouncer + Redis
+# Salin .env.example menjadi .env lalu isi password sebelum menjalankan: docker compose up -d --build
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tka2026-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tka}
+      POSTGRES_USER: ${POSTGRES_USER:-tka}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?isi POSTGRES_PASSWORD di berkas .env}
+      POSTGRES_INITDB_ARGS: --auth=scram-sha-256
+      TZ: Asia/Jakarta
+    command: >
+      postgres -c max_connections=200 -c shared_buffers=256MB -c effective_cache_size=768MB
+      -c work_mem=8MB -c maintenance_work_mem=64MB -c timezone=Asia/Jakarta
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    build: ./docker/pgbouncer
+    image: tka2026-pgbouncer:latest
+    container_name: tka2026-pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_NAME: ${POSTGRES_DB:-tka}
+      DB_USER: ${POSTGRES_USER:-tka}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 2000
+      DEFAULT_POOL_SIZE: 40
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: tka2026-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   tka2026:
     build: .
     image: tka2026:latest
     container_name: tka2026
     restart: unless-stopped
     ports:
-      - "3026:3000"
+      - "${PORT_APP:-3026}:3000"
     environment:
       - TZ=Asia/Jakarta
+      - DATABASE_URL=postgres://${POSTGRES_USER:-tka}:${POSTGRES_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-tka}
+      - REDIS_URL=redis://redis:6379
+      - APP_SECRET=${APP_SECRET:-}
+      - SUPERADMIN_PASSWORD=${SUPERADMIN_PASSWORD:-}
+      - PG_POOL_MAX=${PG_POOL_MAX:-30}
+      # batas laju: permintaan per menit per akun / per IP (API publik), percobaan login per 5 menit
+      - RL_USER=${RL_USER:-240}
+      - RL_IP=${RL_IP:-600}
+      - RL_LOGIN=${RL_LOGIN:-10}
       # master kosong: data demo TIDAK dibuat. Isi 1 bila ingin sekolah contoh [DEMO] untuk mencoba fitur analisis
-      - SEED_DEMO=0
+      - SEED_DEMO=${SEED_DEMO:-0}
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
     volumes:
-      # database, gambar unggahan, cadangan, dan kunci rahasia — cadangkan folder ini
+      # gambar unggahan, cadangan, log, dan kunci rahasia — cadangkan folder ini (database ada di data/postgres)
       - ./data:/data
       # kode dibaca langsung dari folder ini: pembaruan cukup salin berkas lalu buat berkas data/.muat-ulang
       - ./server:/app/server:ro
