@@ -33,23 +33,26 @@ function Beranda() {
   const s = d.soal || {};
   return html`
     <${PageHead} title=${`Halo, ${session.user.nama}`} sub=${session.sekolah ? `${session.sekolah.nama}${session.user.kelas ? ` · Kelas ${session.user.kelas}` : ''}` : 'Guru penulis soal pusat'}>
-      <a class="btn btn-p" href="#/guru/soal/baru"><${Icon} n="plus" s=${18} />Input Soal</a><//>
-    <section class="grid-auto" style="--min:200px">
-      <${Stat} icon="book" tone="sky" value=${fmt.bulat(s.total || 0)} label="Soal saya" />
+      <a class="btn btn-o" href="#/guru/soal"><${Icon} n="book" s=${18} />Bank soal</a>
+      <a class="btn btn-p" href="#/guru/soal/baru"><${Icon} n="plus" s=${18} />Tulis soal</a><//>
+    ${(s.draf || 0) + (s.revisi || 0) > 0 && html`<a href="#/guru/soal" class="card row" style="padding:12px 16px;text-decoration:none;color:var(--ink);border-color:var(--sky-200);background:var(--sky-50)"><${Icon} n="send" s=${20} />
+      <span class="grow small"><strong>${(s.draf || 0) + (s.revisi || 0)} soal</strong> belum diajukan untuk ditelaah. Soal baru dipakai ujian setelah disetujui.</span><span class="small" style="font-weight:600;color:var(--sky-700)">Ajukan →</span></a>`}
+    <section class="grid-auto" style="--min:160px">
+      <${Stat} icon="book" tone="sky" value=${fmt.bulat(s.total || 0)} label="Soal saya" sub=${`${fmt.bulat(s.draf || 0)} draf`} href="#/guru/soal" />
       <${Stat} icon="check-circle" tone="green" value=${fmt.bulat(s.disetujui || 0)} label="Disetujui" />
       <${Stat} icon="clock" tone="amber" value=${fmt.bulat(s.menunggu || 0)} label="Menunggu telaah" />
-      <a href="#/guru/soal" style="text-decoration:none;color:inherit"><${Stat} icon="message" tone="red" value=${fmt.bulat(s.revisi || 0)} label="Perlu revisi" /></a>
+      <${Stat} icon="message" tone="red" value=${fmt.bulat(s.revisi || 0)} label="Perlu revisi" href="#/guru/soal" />
     </section>
-    <section class="grid-auto" style="--min:320px;gap:20px">
-      ${session.user.npsn && html`<a href="#/guru/koreksi" class="card pad row" style="text-decoration:none;color:inherit"><span class="tile lg t-violet"><${Icon} n="check-circle" s=${26} /></span>
-        <span class="col grow" style="gap:2px"><strong style="font-size:18px">${fmt.bulat(d.perlu_koreksi || 0)} jawaban perlu dikoreksi</strong><span class="small muted">Uraian dan isian tanpa kunci</span></span><${Icon} n="chev-r" /></a>`}
-      <a href="#/guru/feedback" class="card pad row" style="text-decoration:none;color:inherit"><span class="tile lg t-orange"><${Icon} n="message" s=${26} /></span>
-        <span class="col grow" style="gap:2px"><strong style="font-size:18px">${d.feedback_baru} feedback baru</strong><span class="small muted">Laporan siswa tentang soal Anda</span></span><${Icon} n="chev-r" /></a>
-      ${session.user.bisa_monitor ? html`<a href="#/guru/monitor" class="card pad row" style="text-decoration:none;color:inherit"><span class="tile lg t-green"><${Icon} n="monitor" s=${26} /></span>
-        <span class="col grow" style="gap:2px"><strong style="font-size:18px">${fmt.bulat(d.mengerjakan || 0)} siswa sedang ujian</strong><span class="small muted">Monitor dan reset login</span></span><${Icon} n="chev-r" /></a>` : ''}
-    </section>
-    ${(s.draf || 0) + (s.revisi || 0) > 0 && html`<div class="card row" style="padding:16px;background:var(--sky-50)"><${Icon} n="send" /><span class="grow small">${(s.draf || 0) + (s.revisi || 0)} soal belum diajukan untuk ditelaah. Soal hanya dipakai ujian setelah disetujui.</span>
-      <a class="btn btn-p btn-sm" href="#/guru/soal">Buka Bank Soal</a></div>`}`;
+    <section class="card col" style="gap:0">
+      <div class="card-head"><h2>Pekerjaan hari ini</h2></div>
+      <nav class="aksi-list" style="padding:2px 20px 6px" aria-label="Pekerjaan guru">
+        ${session.user.npsn && html`<a href="#/guru/koreksi"><${Icon} n="check-circle" s=${18} />Koreksi jawaban uraian & isian<span class="ket">${fmt.bulat(d.perlu_koreksi || 0)} jawaban</span><${Icon} n="chev-r" s=${16} /></a>`}
+        <a href="#/guru/feedback"><${Icon} n="message" s=${18} />Feedback siswa tentang soal Anda<span class="ket">${fmt.bulat(d.feedback_baru || 0)} baru</span><${Icon} n="chev-r" s=${16} /></a>
+        ${session.user.bisa_monitor ? html`<a href="#/guru/monitor"><${Icon} n="monitor" s=${18} />Monitor ujian & reset login<span class="ket">${fmt.bulat(d.mengerjakan || 0)} sedang ujian</span><${Icon} n="chev-r" s=${16} /></a>` : ''}
+        ${session.user.npsn && html`<a href="#/guru/analisis"><${Icon} n="pie" s=${18} />Analisis hasil kelas<${Icon} n="chev-r" s=${16} /></a>`}
+        <a href="#/guru/backup"><${Icon} n="database" s=${18} />Ekspor / impor bank soal<${Icon} n="chev-r" s=${16} /></a>
+      </nav>
+    </section>`;
 }
 
 export function Feedback() {
