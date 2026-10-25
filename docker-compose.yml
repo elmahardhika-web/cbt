@@ -1,0 +1,19 @@
+services:
+  tka2026:
+    build: .
+    image: tka2026:latest
+    container_name: tka2026
+    restart: unless-stopped
+    ports:
+      - "3026:3000"
+    environment:
+      - TZ=Asia/Jakarta
+      # master kosong: data demo TIDAK dibuat. Isi 1 bila ingin sekolah contoh [DEMO] untuk mencoba fitur analisis
+      - SEED_DEMO=0
+    volumes:
+      # database, gambar unggahan, cadangan, dan kunci rahasia — cadangkan folder ini
+      - ./data:/data
+      # kode dibaca langsung dari folder ini: pembaruan cukup salin berkas lalu buat berkas data/.muat-ulang
+      - ./server:/app/server:ro
+      - ./public:/app/public:ro
+      - ./seed:/app/seed:ro

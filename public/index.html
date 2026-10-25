@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+  // HP: tampilan menyesuaikan layar; pengguna boleh memilih "Tampilan desktop" (disimpan di perangkat)
+  try {
+    if (screen.width < 768) {
+      document.documentElement.classList.add('layar-hp');
+      if (localStorage.getItem('tka2026.layar') === 'desktop') document.querySelector('meta[name=viewport]').content = 'width=1280';
+    }
+  } catch (e) { /* abaikan */ }
+</script>
+<meta name="theme-color" content="#1F6BE0">
+<title>TKA SD 2026</title>
+<link rel="icon" href="/img/icon.svg?v=2" type="image/svg+xml">
+<link rel="icon" href="/img/icon-32.png?v=2" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/img/apple-touch-icon.png?v=2">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+</head>
+<body>
+<div id="app"><div class="loading"><span class="spinner"></span>Memuat aplikasi…</div></div>
+<noscript>Aplikasi ini membutuhkan JavaScript.</noscript>
+<script type="module" src="/app/main.js"></script>
+</body>
+</html>
