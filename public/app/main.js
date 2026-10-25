@@ -11,7 +11,6 @@ const MODUL = {
   siswa: () => import('./pages/siswa.js'),
   admin: () => import('./pages/admin.js'),
   guru: () => import('./pages/guru.js'),
-  supervisor: () => import('./pages/supervisor.js'),
   pusat: () => import('./pages/pusat.js'),
   akun: () => import('./pages/akun.js'),
   cetak: () => import('./pages/cetak.js'),
@@ -33,7 +32,7 @@ function Lazy({ mod, name, ...props }) {
   return html`<${C} ...${props} />`;
 }
 
-const AREA = { pusat: 'superadmin', supervisor: 'supervisor', admin: 'admin', guru: 'guru', ujian: 'siswa' };
+const AREA = { pusat: 'superadmin', admin: 'admin', guru: 'guru', ujian: 'siswa' };
 
 function App() {
   const route = useRoute();
@@ -67,7 +66,8 @@ function App() {
   if (seg === 'akun') return html`<${Lazy} mod="akun" name="Akun" route=${route} />`;
   const need = AREA[seg];
   if (!need || need !== u.peran) { go(berandaPeran(u.peran).slice(1)); return null; }
-  const mod = { superadmin: 'pusat', supervisor: 'supervisor', admin: 'admin', guru: 'guru', siswa: 'siswa' }[u.peran];
+  const mod = { superadmin: 'pusat', admin: 'admin', guru: 'guru', siswa: 'siswa' }[u.peran];
+  if (!mod) { setSession({ token: null }); go('/masuk'); return null; }
   return html`<${Lazy} mod=${mod} name="App" route=${route} />`;
 }
 

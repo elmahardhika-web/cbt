@@ -9,7 +9,8 @@ import { PRESET_LATAR } from '../tampilan.js';
 import { Backup } from './backup.js';
 import { UjianMassal } from './massal.js';
 import { BankSoal, EditorSoal, useMaster } from './soal.js';
-import { Telaah } from './supervisor.js';
+import { Telaah, RingkasanTelaah } from './telaah.js';
+import { Feedback } from './guru.js';
 import { Analisis } from './analisis.js';
 import { DaftarSekolah } from './sekolah.js';
 import { DataPengguna } from './pengguna.js';
@@ -28,6 +29,8 @@ export function App({ route }) {
   else if (p === '/pusat/soal/baru') page = html`<${EditorSoal} key="baru" base="#/pusat/soal" mode="pusat" />`;
   else if ((m = match('/pusat/soal/:id', p))) page = html`<${EditorSoal} key=${m.id} id=${+m.id} base="#/pusat/soal" mode="pusat" />`;
   else if (p === '/pusat/telaah') page = html`<${Telaah} />`;
+  else if (p === '/pusat/telaah-ringkasan') page = html`<${RingkasanTelaah} />`;
+  else if (p === '/pusat/feedback') page = html`<${Feedback} />`;
   else if (p === '/pusat/master') page = html`<${Master} />`;
   else if (p === '/pusat/analisis') page = html`<${Analisis} lingkup="pusat" />`;
   else if (p === '/pusat/dasbor') page = html`<${DasborWilayah} base="#/pusat" />`;
@@ -45,33 +48,44 @@ function Dashboard() {
   if (loading) return html`<${Loading} />`;
   if (error) return html`<${ErrorBox} error=${error} retry=${reload} />`;
   return html`
-    <${PageHead} title="Dashboard Superadmin" sub="Ringkasan seluruh sekolah peserta TKA">
-      <button class="btn btn-s" onClick=${() => setPindah(true)}><${Icon} n="swap" s=${18} />Pindah Peran</button>
-      <a class="btn btn-p" href="#/pusat/sekolah"><${Icon} n="plus" s=${18} />Tambah Sekolah</a><//>
-    ${aju.data?.menunggu > 0 && html`<a class="card row" href="#/pusat/pengajuan" style="padding:14px 18px;gap:12px;text-decoration:none;color:var(--ink);background:var(--amber-50);border-color:var(--amber-100)">
-      <span class="tile t-amber"><${Icon} n="send" s=${20} /></span><span class="grow"><strong>${aju.data.menunggu} pengajuan akun sekolah</strong> menunggu keputusan Anda.</span>
-      <span class="btn btn-p btn-sm">Tinjau <${Icon} n="arrow-r" s=${16} /></span></a>`}
-    <section class="grid-auto" style="--min:190px">
-      <${Stat} icon="school" tone="sky" value=${fmt.bulat(d.sekolah)} label="Sekolah" />
-      <${Stat} icon="users" tone="green" value=${fmt.bulat(d.siswa)} label="Siswa" />
+    <${PageHead} title="Dashboard Superadmin" sub=${`${fmt.hari(Date.now())} · ${sesi.info?.nama_instansi || ''}`}>
+      <button class="btn btn-o" onClick=${() => setPindah(true)}><${Icon} n="swap" s=${18} />Pindah peran</button>
+      <a class="btn btn-p" href="#/pusat/sekolah"><${Icon} n="plus" s=${18} />Tambah sekolah</a><//>
+    ${aju.data?.menunggu > 0 && html`<a class="card row" href="#/pusat/pengajuan" style="padding:12px 16px;gap:12px;text-decoration:none;color:var(--ink);border-color:#F0D7A4;background:var(--amber-50)">
+      <${Icon} n="send" s=${20} /><span class="grow small"><strong>${aju.data.menunggu} pengajuan akun sekolah</strong> menunggu keputusan Anda.</span>
+      <span class="small" style="font-weight:600;color:var(--sky-700)">Tinjau →</span></a>`}
+    <section class="grid-auto" style="--min:170px">
+      <${Stat} icon="school" tone="sky" value=${fmt.bulat(d.sekolah)} label="Sekolah" sub=${`${d.provinsi} provinsi`} href="#/pusat/sekolah" />
+      <${Stat} icon="users" tone="green" value=${fmt.bulat(d.siswa)} label="Siswa" href="#/pusat/pengguna" />
       <${Stat} icon="book" tone="orange" value=${fmt.bulat(d.guru)} label="Guru" />
       <${Stat} icon="user" tone="violet" value=${fmt.bulat(d.admin)} label="Admin sekolah" />
-      <${Stat} icon="shield" tone="pink" value=${fmt.bulat(d.supervisor)} label="Supervisor" />
+      <${Stat} icon="check-circle" tone="slate" value=${fmt.bulat(d.selesai)} label="Ujian diselesaikan" sub="seluruh sekolah" href="#/pusat/analisis" />
     </section>
-    <section class="row wrap" style="gap:20px;align-items:stretch">
-      <div class="hero col" style="flex:1 1 360px;gap:14px">
-        <span class="deco" style="width:220px;height:220px;background:rgba(255,255,255,.22);right:-60px;top:-80px"></span>
-        <span class="chip white" style="align-self:flex-start"><span class="dot live"></span>Langsung</span>
-        <strong style="font-size:40px;line-height:1">${fmt.bulat(d.mengerjakan)}</strong>
-        <span style="font-weight:600">siswa sedang mengerjakan · ${d.ujian_aktif} jadwal ujian dibuka</span>
-        <span class="row wrap gap-8"><a class="btn" style="background:#fff;color:var(--sky-700)" href="#/pusat/dasbor"><${Icon} n="map" s=${18} />Dasbor Wilayah</a>
-          <a class="btn" style="background:rgba(255,255,255,.18);color:#fff" href="#/pusat/analisis"><${Icon} n="pie" s=${18} />Analisis Rinci</a></span>
+    <section class="dasbor-grid">
+      <div class="hero col s5" style="gap:12px">
+        <span class="row gap-8 small" style="font-weight:600"><span class="dot live"></span>Langsung</span>
+        <strong style="font-size:38px;line-height:1" class="num">${fmt.bulat(d.mengerjakan)}</strong>
+        <span class="muted-inv">siswa sedang mengerjakan · ${d.ujian_aktif} jadwal ujian dibuka</span>
+        <span class="row wrap gap-8" style="margin-top:auto"><a class="btn btn-inv" href="#/pusat/dasbor"><${Icon} n="map" s=${18} />Dasbor wilayah</a>
+          <a class="btn btn-inv-o" href="#/pusat/ujian"><${Icon} n="calendar" s=${18} />Ujian massal</a></span>
       </div>
-      <div class="card pad col" style="flex:999 1 420px;gap:12px">
-        <div class="row" style="justify-content:space-between"><h2>Kesiapan Soal per Mapel</h2><a class="btn btn-g btn-sm" href="#/pusat/telaah">${d.telaah_menunggu} menunggu telaah</a></div>
-        ${d.soal.map((m) => html`<div class="col" style="gap:6px">
-          <div class="row small" style="justify-content:space-between"><strong>${m.nama}</strong><span class="muted">${m.disetujui} disetujui${m.menunggu ? ` · ${m.menunggu} menunggu` : ''}${m.revisi ? ` · ${m.revisi} revisi` : ''}</span></div>
-          <${Bar} value=${m.total ? (m.disetujui / m.total) * 100 : 0} /></div>`)}
+      <div class="card col s7" style="gap:0">
+        <div class="card-head"><h2 class="grow">Kesiapan soal per mapel</h2><a class="small" style="font-weight:600;text-decoration:none" href="#/pusat/telaah">${d.telaah_menunggu} menunggu telaah →</a></div>
+        <div class="col" style="padding:16px 20px;gap:14px">
+        ${d.soal.length === 0 ? html`<span class="small muted">Belum ada mata pelajaran.</span>` : d.soal.map((m) => html`<div class="col" style="gap:6px">
+          <div class="row small" style="justify-content:space-between"><strong>${m.nama}</strong><span class="muted num">${m.disetujui}/${m.total} disetujui${m.menunggu ? ` · ${m.menunggu} menunggu` : ''}${m.revisi ? ` · ${m.revisi} revisi` : ''}</span></div>
+          <${Bar} value=${m.total ? (m.disetujui / m.total) * 100 : 0} tone="green" /></div>`)}
+        </div>
+      </div>
+      <div class="card col s12" style="gap:0">
+        <div class="card-head"><h2 class="grow">Pekerjaan superadmin</h2></div>
+        <nav class="aksi-list" style="padding:4px 20px" aria-label="Pintasan">
+          <a href="#/pusat/telaah"><${Icon} n="shield" s=${18} />Telaah soal dari guru<span class="ket">${d.telaah_menunggu} menunggu</span><${Icon} n="chev-r" s=${16} /></a>
+          <a href="#/pusat/feedback"><${Icon} n="message" s=${18} />Feedback siswa tentang soal<span class="ket">${d.feedback_baru} belum dibaca</span><${Icon} n="chev-r" s=${16} /></a>
+          <a href="#/pusat/pengajuan"><${Icon} n="send" s=${18} />Pengajuan akun sekolah<span class="ket">${d.pengajuan} menunggu</span><${Icon} n="chev-r" s=${16} /></a>
+          <a href="#/pusat/pengaturan"><${Icon} n="headset" s=${18} />Kontak helpdesk & dokumen panduan<span class="ket">${(sesi.info?.helpdesk || []).length} kontak</span><${Icon} n="chev-r" s=${16} /></a>
+          <a href="#/pusat/backup"><${Icon} n="database" s=${18} />Backup & restore database<span class="ket">PostgreSQL</span><${Icon} n="chev-r" s=${16} /></a>
+        </nav>
       </div>
     </section>
     ${pindah && html`<${PindahPeran} onClose=${() => setPindah(false)} />`}`;
@@ -123,7 +137,7 @@ function Pengaturan() {
     ${(f[key] || []).map((row, i) => html`<div class="row wrap gap-8">${cols.map(([c, ph, w]) => html`<input class="input" style=${`flex:${w}`} placeholder=${ph} value=${row[c] || ''} aria-label=${ph}
       onInput=${(e) => set({ [key]: f[key].map((r, j) => (j === i ? { ...r, [c]: e.target.value } : r)) })} />`)}
       <button class="icon-btn danger" aria-label="Hapus baris" onClick=${() => set({ [key]: f[key].filter((_, j) => j !== i) })}><${Icon} n="trash" s=${18} /></button></div>`)}
-    <button class="btn btn-g btn-sm" style="align-self:flex-start;color:var(--sky-700)" onClick=${() => set({ [key]: [...(f[key] || []), kosong] })}><${Icon} n="plus" s=${16} />Tambah</button></div>`;
+    <button class="btn btn-o btn-sm" style="align-self:flex-start" onClick=${() => set({ [key]: [...(f[key] || []), kosong] })}><${Icon} n="plus" s=${16} />Tambah</button></div>`;
   return html`<${PageHead} title="Pengaturan" sub="Identitas aplikasi, target capaian, tampilan, dan informasi di halaman depan">
       <button class="btn btn-p" onClick=${simpan}><${Icon} n="check" s=${18} />Simpan</button><//>
     <section class="card pad col" style="gap:16px">
@@ -156,8 +170,20 @@ function Pengaturan() {
       </div>
       <span class="small muted">Klik <strong>Simpan</strong> di atas untuk menerapkan. Sekolah yang mengunggah logo sendiri tetap memakai logonya.</span>
     </section>
-    <section class="card pad col"><h2>Helpdesk</h2><span class="small muted">Ditampilkan di halaman depan. Nomor HP otomatis menjadi tautan WhatsApp.</span>
-      ${listEditor('helpdesk', [['nama', 'Nama (mis. Helpdesk 1)', 1], ['kontak', 'Nomor HP atau tautan', 2]], { nama: '', kontak: '' })}</section>
+    <section class="card pad col"><h2>Helpdesk</h2><span class="small muted">Tampil sebagai tombol <strong>Helpdesk</strong> di pojok kanan bawah dashboard sekolah dan guru, serta di halaman depan.</span>
+      <div class="col" style="gap:8px">
+        ${(f.helpdesk || []).map((row, i) => html`<div class="row wrap gap-8">
+          <select class="select" style="flex:0 0 140px" aria-label="Jenis kontak" value=${row.jenis || 'whatsapp'} onChange=${(e) => set({ helpdesk: f.helpdesk.map((r, j) => (j === i ? { ...r, jenis: e.target.value } : r)) })}>
+            ${[['whatsapp', 'WhatsApp'], ['telepon', 'Telepon'], ['email', 'Email'], ['telegram', 'Telegram'], ['tautan', 'Tautan web']].map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select>
+          ${[['nama', 'Nama (mis. Helpdesk Kab. Bogor)', 2], ['kontak', 'Nomor / alamat / tautan', 2], ['jam', 'Jam layanan (mis. 07.00–16.00)', 1.5]].map(([c, ph, w]) => html`<input class="input" style=${`flex:${w} 1 160px`} placeholder=${ph} aria-label=${ph} value=${row[c] || ''}
+            onInput=${(e) => set({ helpdesk: f.helpdesk.map((r, j) => (j === i ? { ...r, [c]: e.target.value } : r)) })} />`)}
+          <button class="icon-btn danger" aria-label="Hapus kontak" onClick=${() => set({ helpdesk: f.helpdesk.filter((_, j) => j !== i) })}><${Icon} n="trash" s=${18} /></button></div>`)}
+        <button class="btn btn-o btn-sm" style="align-self:flex-start" onClick=${() => set({ helpdesk: [...(f.helpdesk || []), { jenis: 'whatsapp', nama: '', kontak: '', jam: '' }] })}><${Icon} n="plus" s=${16} />Tambah kontak</button>
+      </div></section>
+    <section class="card pad col"><h2>Halaman masuk admin sekolah</h2>
+      <label class="row" style="gap:12px;align-items:flex-start"><${Switch} checked=${f.capaian_publik !== false} label="Tampilkan capaian sekolah" onChange=${(v) => set({ capaian_publik: v })} />
+        <span class="small" style="color:var(--text-2)">Tampilkan ringkasan hasil ujian (rata-rata, persentase capai target, sekolah dengan rata-rata tertinggi) di halaman masuk. Hanya angka gabungan, tanpa nama siswa; sekolah dengan kurang dari 5 peserta tidak ditampilkan.</span></label>
+    </section>
     <section class="card pad col"><h2>Dokumen Pendukung</h2><span class="small muted">Tautan PDF panduan (misalnya dari Google Drive).</span>
       ${listEditor('dokumen', [['nama', 'Judul dokumen', 2], ['keterangan', 'Keterangan (Versi 2.0 · PDF)', 2], ['url', 'Tautan', 3]], { nama: '', keterangan: '', url: '' })}</section>
     <section class="card pad col">

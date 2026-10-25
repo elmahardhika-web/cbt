@@ -28,7 +28,7 @@ function ringkasKunci(s) {
   }
 }
 
-/** Daftar bank soal. mode: guru | admin | supervisor | pusat */
+/** Daftar bank soal. mode: guru | admin | pusat */
 export function BankSoal({ mode, base }) {
   const master = useMaster();
   const [f, setF] = useState({ mapel: '', kategori: '', tipe: '', status: '', q: '' });
@@ -98,7 +98,7 @@ export function BankSoal({ mode, base }) {
                   ${s.feedback_baru > 0 && html`<${Chip} c="orange" icon="message">${s.feedback_baru} feedback<//>`}
                 </div>
                 <p class="small" style="line-height:1.55;color:var(--body)">${plain(s.pertanyaan).slice(0, 260)}${plain(s.pertanyaan).length > 260 ? '…' : ''}</p>
-                ${s.status === 'revisi' && s.catatan_telaah && html`<div class="small" style="padding:10px 12px;border-radius:12px;background:var(--red-50);color:#7F1D1D"><strong>Catatan supervisor:</strong> ${s.catatan_telaah}</div>`}
+                ${s.status === 'revisi' && s.catatan_telaah && html`<div class="small" style="padding:10px 12px;border-radius:12px;background:var(--red-50);color:#7F1D1D"><strong>Catatan penelaah:</strong> ${s.catatan_telaah}</div>`}
                 <div class="row wrap tiny muted" style="gap:16px"><span>Kunci: <strong style="color:var(--ink)">${ringkasKunci(s)}</strong></span><span>Skor maks ${s.skor_maks}</span>
                   ${mode !== 'guru' && s.penulis && html`<span>Penulis: ${s.penulis}</span>`}${s.dipakai > 0 && html`<span>Sudah dijawab ${s.dipakai}×</span>`}</div>
               </div>
@@ -263,7 +263,7 @@ export function EditorSoal({ id, base, mode }) {
         : html`<button class="btn btn-p" disabled=${busy} onClick=${() => simpan('setujui')}><${Icon} n="check" s=${18} />Simpan & Setujui</button>`}
     <//>
     ${s.status === 'revisi' && s.catatan_telaah && html`<div class="card row" style="padding:14px 16px;background:var(--red-50);border-color:#FECACA;align-items:flex-start">
-      <${Icon} n="message" /><span class="small"><strong>Catatan supervisor:</strong> ${s.catatan_telaah}</span></div>`}
+      <${Icon} n="message" /><span class="small"><strong>Catatan penelaah:</strong> ${s.catatan_telaah}</span></div>`}
     <div class="row wrap" style="gap:20px;align-items:flex-start">
       <div class="col" style="flex:999 1 640px;min-width:0;gap:20px">
         <section class="card pad form-grid" style="grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))">
@@ -426,7 +426,7 @@ export function BackupSoal() {
         <button class="btn btn-o" onClick=${ekspor}><${Icon} n="download" s=${18} />Unduh backup soal saya</button>
         <label class="btn btn-p" style="cursor:pointer"><${Icon} n="upload" s=${18} />${busy ? 'Mengimpor…' : 'Impor dari file JSON'}<input type="file" accept=".json,application/json" hidden onChange=${(e) => { impor(e.target.files[0]); e.target.value = ''; }} /></label>
       </div>
-      <p class="small muted">Soal hasil impor berstatus draf. Ajukan ke supervisor dari halaman Bank Soal agar bisa dipakai ujian.</p>
+      <p class="small muted">Soal hasil impor berstatus draf. Ajukan untuk ditelaah dari halaman Bank Soal agar bisa dipakai ujian.</p>
       ${hasil && html`<div class="card pad col" style="box-shadow:none;background:var(--surface-2)">
         <strong>${hasil.berhasil} soal berhasil diimpor${hasil.gagal.length ? `, ${hasil.gagal.length} gagal` : ''}.</strong>
         ${hasil.gagal.slice(0, 20).map((g) => html`<span class="small" style="color:var(--red-700)">Soal ke-${g.no}: ${g.pesan}</span>`)}

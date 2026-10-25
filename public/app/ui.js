@@ -89,15 +89,35 @@ export function Switch({ checked, onChange, label, disabled }) {
 
 export const Chip = ({ c = '', children, icon }) => html`<span class=${cls('chip', c)}>${icon && html`<${Icon} n=${icon} s=${12} />`}${children}</span>`;
 
-export function Stat({ icon, tone = 'sky', value, label, sub }) {
-  return html`<div class="card stat"><span class=${cls('tile', `t-${tone}`)}><${Icon} n=${icon} s=${22} /></span>
-    <span class="col gap-4" style="gap:0"><strong class="num">${value}</strong><span>${label}</span>${sub && html`<span class="tiny">${sub}</span>`}</span></div>`;
+const WARNA_TONE = { sky: 'var(--sky-700)', green: 'var(--green-700)', orange: 'var(--orange-700)', violet: 'var(--violet-700)', pink: 'var(--pink-700)', amber: 'var(--amber-800)', red: 'var(--red-700)', slate: 'var(--muted)' };
+
+/** Kartu angka: label di atas, angka besar, keterangan kecil. href → seluruh kartu menjadi tautan. */
+export function Stat({ icon, tone = 'sky', value, label, sub, href }) {
+  const isi = html`<div class="card stat">
+    <span class="stat-top"><span class="stat-label">${label}</span>${icon && html`<span class="stat-ic" style=${`color:${WARNA_TONE[tone] || 'var(--muted)'}`}><${Icon} n=${icon} s=${18} /></span>`}</span>
+    <strong>${value}</strong>${sub && html`<span class="stat-sub">${sub}</span>`}</div>`;
+  return href ? html`<a class="stat-link" href=${href}>${isi}</a>` : isi;
 }
+
+/**
+ * Penghitung ringkas: deretan angka dengan label (mis. Total · Laki-laki · Perempuan · Aktif).
+ * items: [{ label, value, onClick?, on? }] — item yang punya onClick menjadi tombol penyaring.
+ */
+export function Hitung({ items, label = 'Ringkasan jumlah' }) {
+  return html`<div class="hitung" role="group" aria-label=${label}>
+    ${items.filter(Boolean).map((x) => (x.onClick
+      ? html`<button type="button" class=${x.on ? 'on' : ''} aria-pressed=${!!x.on} onClick=${x.onClick}><strong>${x.value}</strong><span>${x.label}</span></button>`
+      : html`<div><strong>${x.value}</strong><span>${x.label}</span></div>`))}
+  </div>`;
+}
+
+/** Nomor urut baris tabel yang memperhitungkan halaman. */
+export const nomorUrut = (i, halaman = 1, per = 0) => (halaman - 1) * per + i + 1;
 
 export const Loading = ({ text = 'Memuat…' }) => html`<div class="loading"><span class="spinner"></span>${text}</div>`;
 
 export function Empty({ icon = 'info', title, children }) {
-  return html`<div class="empty"><span class="tile t-sky"><${Icon} n=${icon} s=${26} /></span><strong style="color:var(--ink)">${title}</strong>${children && html`<div class="small">${children}</div>`}</div>`;
+  return html`<div class="empty"><span class="tile"><${Icon} n=${icon} s=${22} /></span><strong style="color:var(--ink)">${title}</strong>${children && html`<div class="small">${children}</div>`}</div>`;
 }
 
 export function ErrorBox({ error, retry }) {
@@ -123,14 +143,14 @@ export function Seg({ items, value, onChange, soft }) {
 
 export function Pager({ halaman, per, total, onChange }) {
   const maks = Math.max(1, Math.ceil(total / per));
-  if (total <= per) return html`<span class="small muted">${total} data</span>`;
+  if (total <= per) return html`<span class="small muted">Menampilkan ${total} data</span>`;
   const pages = [];
   for (let i = Math.max(1, halaman - 2); i <= Math.min(maks, halaman + 2); i++) pages.push(i);
   return html`<div class="row wrap" style="justify-content:space-between;width:100%">
     <span class="small muted">Menampilkan ${(halaman - 1) * per + 1}–${Math.min(total, halaman * per)} dari ${total}</span>
     <span class="row gap-4">
       <button class="icon-btn" style="width:38px;height:38px" aria-label="Sebelumnya" disabled=${halaman <= 1} onClick=${() => onChange(halaman - 1)}><${Icon} n="chev-l" s=${18} /></button>
-      ${pages.map((p) => html`<button class=${cls('icon-btn', p === halaman && 'on')} style=${`width:38px;height:38px;font-weight:800;${p === halaman ? 'background:var(--tombol);border:0;color:#fff' : ''}`} onClick=${() => onChange(p)}>${p}</button>`)}
+      ${pages.map((p) => html`<button class=${cls('icon-btn', p === halaman && 'on')} aria-current=${p === halaman ? 'page' : undefined} style=${`width:38px;height:38px;font-weight:600;${p === halaman ? 'background:var(--tombol);border-color:var(--tombol);color:#fff' : ''}`} onClick=${() => onChange(p)}>${p}</button>`)}
       <button class="icon-btn" style="width:38px;height:38px" aria-label="Berikutnya" disabled=${halaman >= maks} onClick=${() => onChange(halaman + 1)}><${Icon} n="chev-r" s=${18} /></button>
     </span>
   </div>`;

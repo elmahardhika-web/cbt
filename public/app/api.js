@@ -79,5 +79,5 @@ export async function loadInfo() {
 }
 
 export function berandaPeran(peran) {
-  return { superadmin: '#/pusat', supervisor: '#/supervisor', admin: '#/admin', guru: '#/guru', siswa: '#/ujian' }[peran] || '#/';
+  return { superadmin: '#/pusat', admin: '#/admin', guru: '#/guru', siswa: '#/ujian' }[peran] || '#/';
 }

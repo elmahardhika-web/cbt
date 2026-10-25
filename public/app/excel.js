@@ -77,9 +77,6 @@ export const KOLOM_IMPOR = {
     ['password', 'Password', 'Kosongkan untuk 123456.'],
     ['npsn', 'NPSN *', 'NPSN sekolah yang sudah terdaftar.'],
   ],
-  supervisor: [
-    ['username', 'Username *', ''], ['nama', 'Nama Lengkap *', ''], ['password', 'Password', 'Kosongkan untuk 123456.'],
-  ],
 };
 
 export async function templateImpor(peran, { sekolah, kelas = [], sesi = [] } = {}) {
@@ -97,7 +94,6 @@ export async function templateImpor(peran, { sekolah, kelas = [], sesi = [] } = 
     siswa: ['contoh', '010045001', 'Aisyah Putri Ramadhani', '', 'P', kelas[0] || '6A', 'Sesi 1', '', '12/05/2014'],
     guru: ['contoh', 'guru.bahasa', 'Nama Guru, S.Pd.', '', sekolah?.npsn || '', '6A', ''],
     admin: ['contoh', 'admin.sekolah', 'Nama Admin', '', '20104244'],
-    supervisor: ['contoh', 'supervisor.mtk', 'Nama Supervisor', ''],
   }[peran];
   dataRow(ws, 6, contoh, { argb: C.ex });
   ws.getRow(6).eachCell((c) => { c.font = { name: FONT, italic: true, color: { argb: 'FF6B7A89' } }; });

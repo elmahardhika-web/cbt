@@ -63,7 +63,7 @@ export function UjianMonitor({ npsn, bolehAtur = true }) {
             ${u.massal_id ? html`<span class="tiny muted">Jadwal, token, dan buka/tutup ujian diatur superadmin. Sekolah memantau dan mencetak berita acara.</span>` : bolehAtur && html`<div class="row gap-8" onClick=${(e) => e.stopPropagation()}>
               <button class="btn btn-o btn-sm" onClick=${() => setForm(u)}><${Icon} n="edit" s=${16} />Ubah</button>
               <button class="btn btn-g btn-sm" style="color:var(--red-700)" onClick=${() => hapus(u)}><${Icon} n="trash" s=${16} />Hapus</button>
-              ${!siap && !u.aktif && html`<span class="tiny muted right">${u.paket.siap === 0 ? 'Belum ada soal disetujui' : 'Menunggu telaah supervisor'}</span>`}
+              ${!siap && !u.aktif && html`<span class="tiny muted right">${u.paket.siap === 0 ? 'Belum ada soal disetujui' : 'Menunggu telaah superadmin'}</span>`}
             </div>`}
           </article>`;
         })}

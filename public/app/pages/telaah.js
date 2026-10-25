@@ -1,27 +1,11 @@
-import { html, useState, useEffect, fmt, cls, TIPE_LABEL, TIPE_WARNA } from '../lib.js';
+// Telaah soal (dahulu peran supervisor, kini dikerjakan superadmin): ringkasan kesiapan paket & antrean telaah.
+import { html, useState, useEffect, fmt, TIPE_LABEL, TIPE_WARNA } from '../lib.js';
 import { Icon } from '../icons.js';
-import { session, get, post } from '../api.js';
-import { Shell } from '../layout.js';
-import { Loading, ErrorBox, Empty, Chip, Stat, Field, toast, toastErr, useAsync, PageHead, Bar } from '../ui.js';
+import { get, post } from '../api.js';
+import { Loading, ErrorBox, Empty, Chip, Stat, Field, toast, toastErr, confirmDialog, useAsync, PageHead, Bar } from '../ui.js';
 import { plain } from '../rich.js';
 import { PratinjauSoal } from './soalview.js';
-import { BankSoal, useMaster } from './soal.js';
-import { Analisis } from './analisis.js';
-import { DasborWilayah } from './dasbor.js';
-import { Profil360 } from './profil360.js';
-import { match } from '../router.js';
-
-export function App({ route }) {
-  const p = route.path;
-  let page, m;
-  if (p === '/supervisor/telaah') page = html`<${Telaah} />`;
-  else if (p === '/supervisor/soal') page = html`<${BankSoal} mode="supervisor" base="#/supervisor/soal" />`;
-  else if (p === '/supervisor/analisis') page = html`<${Analisis} lingkup="pusat" />`;
-  else if (p === '/supervisor/dasbor') page = html`<${DasborWilayah} base="#/supervisor" />`;
-  else if ((m = match('/supervisor/sekolah/:npsn/profil', p))) page = html`<${Profil360} key=${m.npsn} npsn=${m.npsn} back="#/supervisor/dasbor" />`;
-  else page = html`<${RingkasanTelaah} />`;
-  return html`<${Shell} route=${route}>${page}<//>`;
-}
+import { useMaster } from './soal.js';
 
 export function RingkasanTelaah() {
   const { data: d, error, loading, reload } = useAsync(() => get('telaah/ringkasan'), []);
@@ -29,9 +13,9 @@ export function RingkasanTelaah() {
   if (error) return html`<${ErrorBox} error=${error} retry=${reload} />`;
   const ps = d.per_status;
   return html`<${PageHead} title="Dashboard Telaah" sub="Kualitas bank soal sebelum dipakai ujian">
-      <a class="btn btn-p" href=${session.user.peran === 'superadmin' ? '#/pusat/telaah' : '#/supervisor/telaah'}><${Icon} n="shield" s=${18} />Mulai Telaah${ps.menunggu ? ` (${ps.menunggu})` : ''}</a><//>
+      <a class="btn btn-p" href="#/pusat/telaah"><${Icon} n="shield" s=${18} />Mulai Telaah${ps.menunggu ? ` (${ps.menunggu})` : ''}</a><//>
     <section class="grid-auto" style="--min:200px">
-      <${Stat} icon="clock" tone="amber" value=${fmt.bulat(ps.menunggu || 0)} label="Menunggu telaah" />
+      <${Stat} icon="clock" tone="amber" value=${fmt.bulat(ps.menunggu || 0)} label="Menunggu telaah" href="#/pusat/telaah" />
       <${Stat} icon="check-circle" tone="green" value=${fmt.bulat(ps.disetujui || 0)} label="Disetujui" />
       <${Stat} icon="message" tone="red" value=${fmt.bulat(ps.revisi || 0)} label="Diminta revisi" />
       <${Stat} icon="edit" tone="slate" value=${fmt.bulat(ps.draf || 0)} label="Draf guru" />
@@ -40,10 +24,10 @@ export function RingkasanTelaah() {
       <div class="card col" style="flex:999 1 520px;gap:0">
         <div class="card-head"><h2>Kesiapan Paket Soal</h2></div>
         <div class="table-wrap"><table class="tbl">
-          <thead><tr><th>Paket</th><th style="min-width:180px">Disetujui</th><th class="r">Menunggu</th><th class="r">Revisi</th><th class="r">Draf</th></tr></thead>
-          <tbody>${d.per_mapel.length === 0 && html`<tr><td colspan="5"><${Empty} title="Belum ada soal" /></td></tr>`}
-            ${d.per_mapel.map((m) => { const t = m.disetujui + m.menunggu + m.revisi + m.draf; return html`<tr>
-              <td><span class="col" style="gap:0"><strong class="strong">${m.nama}</strong><span class="tiny muted">${m.kategori_nama}</span></span></td>
+          <thead><tr><th class="no">No</th><th>Paket</th><th style="min-width:180px">Disetujui</th><th class="r">Menunggu</th><th class="r">Revisi</th><th class="r">Draf</th></tr></thead>
+          <tbody>${d.per_mapel.length === 0 && html`<tr><td colspan="6"><${Empty} title="Belum ada soal" /></td></tr>`}
+            ${d.per_mapel.map((m, i) => { const t = m.disetujui + m.menunggu + m.revisi + m.draf; return html`<tr>
+              <td class="no">${i + 1}</td><td><span class="col" style="gap:0"><strong class="strong">${m.nama}</strong><span class="tiny muted">${m.kategori_nama}</span></span></td>
               <td><span class="hbar"><${Bar} value=${t ? (m.disetujui / t) * 100 : 0} tone="green" /><strong class="small num">${m.disetujui}/${t}</strong></span></td>
               <td class="r num">${m.menunggu || '–'}</td><td class="r num">${m.revisi || '–'}</td><td class="r num">${m.draf || '–'}</td></tr>`; })}
           </tbody></table></div>
@@ -67,7 +51,13 @@ export function Telaah() {
   const [cek, setCek] = useState({});
   const [catatan, setCatatan] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tandai, setTandai] = useState(new Set());
   const items = data?.items || [];
+  useEffect(() => setTandai(new Set()), [data]);
+  const setujuiMassal = async () => {
+    if (!(await confirmDialog(`Setujui ${tandai.size} soal terpilih sekaligus?`, { ok: 'Setujui semua', detail: 'Gunakan hanya untuk soal yang sudah Anda periksa.' }))) return;
+    try { const r = await post('telaah/massal', { ids: [...tandai], keputusan: 'disetujui' }); toast(`${r.diproses} soal disetujui.`); reload(true); } catch (e) { toastErr(e); }
+  };
   useEffect(() => { if (data && !items.find((s) => s.id === aktif)) setAktif(items[0]?.id ?? null); }, [data]);
   useEffect(() => { setCek({}); setCatatan(''); }, [aktif]);
   const s = items.find((x) => x.id === aktif);
@@ -87,16 +77,23 @@ export function Telaah() {
       reload(true);
     } catch (e) { toastErr(e); } finally { setBusy(false); }
   };
-  return html`<${PageHead} title="Menunggu Telaah" sub=${data ? `${items.length} soal dari ${new Set(items.map((x) => x.penulis_id)).size} penulis` : ''}>
+  return html`<${PageHead} title="Antrean Telaah" sub=${data ? `${items.length} soal dari ${new Set(items.map((x) => x.penulis_id)).size} penulis` : ''}>
+      ${tandai.size > 0 && html`<button class="btn btn-p" onClick=${setujuiMassal}><${Icon} n="check" s=${18} />Setujui ${tandai.size} terpilih</button>`}
       <select class="select" style="width:auto;min-width:200px" aria-label="Mapel" value=${mapel} onChange=${(e) => setMapel(e.target.value)}><option value="">Semua mapel</option>${master.mapel.map((m) => html`<option value=${m.kode}>${m.nama}</option>`)}</select><//>
     ${loading && !data ? html`<${Loading} />` : error ? html`<${ErrorBox} error=${error} retry=${reload} />` : items.length === 0 ? html`<div class="card"><${Empty} icon="check-circle" title="Tidak ada soal yang menunggu telaah">Semua soal sudah ditelaah.<//></div>` : html`
     <div class="row wrap" style="gap:20px;align-items:flex-start">
-      <aside aria-label="Antrean soal" class="col" style="flex:1 1 320px;gap:10px;max-height:80vh;overflow:auto;padding:2px">
-        ${items.map((x) => html`<button class="card col" style=${`padding:14px;gap:8px;text-align:left;cursor:pointer;${x.id === aktif ? 'border:2px solid var(--sky-400)' : ''}`} onClick=${() => setAktif(x.id)}>
-          <span class="row wrap gap-8"><${Chip} c=${TIPE_WARNA[x.tipe]}>${TIPE_LABEL[x.tipe]}<//><${Chip}>${x.mapel} · ${x.kategori}<//></span>
-          <span class="small" style="line-height:1.5;color:var(--body);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${plain(x.pertanyaan)}</span>
-          <span class="tiny muted">${x.penulis || '–'} · diajukan ${fmt.relatif(x.diajukan_at)}</span>
-        </button>`)}
+      <aside aria-label="Antrean soal" class="card col" style="flex:1 1 320px;gap:0;max-height:80vh;overflow:auto">
+        <label class="check" style="padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface-2)"><input type="checkbox" checked=${tandai.size === items.length && items.length > 0}
+          onChange=${(e) => setTandai(e.target.checked ? new Set(items.map((x) => x.id)) : new Set())} /><span class="small">Pilih semua (${items.length})</span></label>
+        ${items.map((x, i) => html`<div class="row" style=${`padding:12px 14px;gap:10px;align-items:flex-start;border-bottom:1px solid var(--line);${x.id === aktif ? 'background:var(--sky-50);box-shadow:inset 3px 0 0 var(--azure)' : ''}`}>
+          <input type="checkbox" style="width:18px;height:18px;margin-top:2px;accent-color:var(--azure)" aria-label=${`Pilih soal ${i + 1}`} checked=${tandai.has(x.id)}
+            onChange=${(e) => { const s2 = new Set(tandai); if (e.target.checked) s2.add(x.id); else s2.delete(x.id); setTandai(s2); }} />
+          <button class="col grow" style="gap:6px;text-align:left;cursor:pointer;background:none;border:0;padding:0" onClick=${() => setAktif(x.id)}>
+            <span class="row wrap gap-8"><span class="tiny muted num">#${i + 1}</span><${Chip} c=${TIPE_WARNA[x.tipe]}>${TIPE_LABEL[x.tipe]}<//><span class="tiny muted">${x.mapel} · ${x.kategori}</span></span>
+            <span class="small" style="line-height:1.5;color:var(--body);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${plain(x.pertanyaan)}</span>
+            <span class="tiny muted">${x.penulis || '–'} · diajukan ${fmt.relatif(x.diajukan_at)}</span>
+          </button>
+        </div>`)}
       </aside>
       ${s && html`<section class="col" style="flex:999 1 560px;min-width:0;gap:16px">
         <article class="card pad col" style="gap:16px">

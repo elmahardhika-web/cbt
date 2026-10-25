@@ -70,6 +70,6 @@ export const TIPE_WARNA = {
 export const STATUS_SOAL = {
   draf: ['Draf', ''], menunggu: ['Menunggu telaah', 'amber'], disetujui: ['Disetujui', 'green'], revisi: ['Perlu revisi', 'red'],
 };
-export const PERAN_LABEL = { superadmin: 'Superadmin', supervisor: 'Supervisor', admin: 'Admin Sekolah', guru: 'Guru', siswa: 'Siswa' };
+export const PERAN_LABEL = { superadmin: 'Superadmin', supervisor: 'Supervisor (lama)', admin: 'Admin Sekolah', guru: 'Guru', siswa: 'Siswa' };
 export const MAPEL_WARNA = ['sky', 'orange', 'green', 'violet', 'pink', 'amber'];
 export const singkat = (kode) => (kode === 'MAT' ? 'MTK' : String(kode || '').slice(0, 3));

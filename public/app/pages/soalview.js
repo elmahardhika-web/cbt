@@ -1,4 +1,4 @@
-// Tampilan satu soal untuk siswa (juga dipakai pratinjau guru/supervisor).
+// Tampilan satu soal untuk siswa (juga dipakai pratinjau guru/penelaah).
 import { html, useState, useEffect, cls } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Rich, pisahSoal } from '../rich.js';

@@ -7,7 +7,7 @@ import { templateImpor, bacaImpor, KOLOM_IMPOR } from '../excel.js';
 import { useLive } from './ujian.js';
 
 /**
- * Tabel pengguna + impor Excel. peran: siswa | guru | admin | supervisor.
+ * Tabel pengguna + impor Excel. peran: siswa | guru | admin.
  * npsn: dikunci ke satu sekolah (admin sekolah) atau null (superadmin).
  */
 export function DataPengguna({ peran, npsn, pilihPeran }) {
@@ -40,7 +40,7 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
     reset: async (u) => { if (!(await confirmDialog(`Reset password ${u.nama} menjadi 123456?`))) return; try { await post(`pengguna/${u.id}/reset-password`); toast('Password direset ke 123456.'); } catch (e) { toastErr(e); } },
     login: async (u) => { try { await post(`pengguna/${u.id}/reset-login`); toast('Login direset.'); reload(true); } catch (e) { toastErr(e); } },
   };
-  const kolSekolah = !npsn && p !== 'supervisor';
+  const kolSekolah = !npsn;
   const semuaDipilih = items.length > 0 && items.every((u) => pilih.has(u.id));
 
   return html`
@@ -49,12 +49,12 @@ export function DataPengguna({ peran, npsn, pilihPeran }) {
       <button class="btn btn-s" onClick=${() => setImpor(true)}><${Icon} n="upload" s=${18} />Impor Excel</button>
       <button class="btn btn-p" onClick=${() => setForm({})}><${Icon} n="plus" s=${18} />Tambah ${PERAN_LABEL[p]}</button>
     <//>
-    ${pilihPeran && html`<div class="seg" role="tablist">${['admin', 'guru', 'supervisor', 'siswa'].map((x) => html`<button class=${p === x ? 'on' : ''} onClick=${() => { setP(x); setF({ ...f, kelas: '', sesi: '' }); }}>${PERAN_LABEL[x]}</button>`)}</div>`}
+    ${pilihPeran && html`<div class="seg" role="tablist">${['admin', 'guru', 'siswa'].map((x) => html`<button class=${p === x ? 'on' : ''} onClick=${() => { setP(x); setF({ ...f, kelas: '', sesi: '' }); }}>${PERAN_LABEL[x]}</button>`)}</div>`}
     <div class="row wrap" style="gap:20px;align-items:flex-start">
       <section class="card col" style="flex:999 1 620px;min-width:0;gap:0">
         <div class="row wrap" style="padding:16px;gap:10px;border-bottom:1px solid var(--line)">
           <label class="input-icon soft" style="flex:1 1 220px"><${Icon} n="search" s=${18} /><input type="search" placeholder="Cari nama atau username" aria-label="Cari" value=${f.q} onInput=${(e) => set({ q: e.target.value })} /></label>
-          ${!npsn && p !== 'supervisor' && html`<select class="select" style="width:auto;min-width:200px" aria-label="Sekolah" value=${f.npsn} onChange=${(e) => set({ npsn: e.target.value, kelas: '', sesi: '' })}>
+          ${!npsn && html`<select class="select" style="width:auto;min-width:200px" aria-label="Sekolah" value=${f.npsn} onChange=${(e) => set({ npsn: e.target.value, kelas: '', sesi: '' })}>
             <option value="">Semua sekolah</option>${(sekolahList.data || []).map((s) => html`<option value=${s.npsn}>${s.nama}</option>`)}</select>`}
           ${(siswa || p === 'guru') && html`<select class="select" style="width:auto" aria-label="Kelas" value=${f.kelas} onChange=${(e) => set({ kelas: e.target.value })}><option value="">Semua kelas</option>${(opsiKelas.data?.kelas || []).map((k) => html`<option>${k}</option>`)}</select>`}
           ${siswa && html`<select class="select" style="width:auto" aria-label="Sesi" value=${f.sesi} onChange=${(e) => set({ sesi: e.target.value })}><option value="">Semua sesi</option>${(opsiKelas.data?.sesi || []).map((k) => html`<option>${k}</option>`)}</select>`}
@@ -124,7 +124,7 @@ function FormPengguna({ peran, awal, npsn, sekolah, onClose, onSaved }) {
       <${Field} label=${peran === 'siswa' ? 'No. Peserta (username)' : 'Username'} hint=${peran === 'siswa' && !awal.id ? 'kosong = otomatis' : ''}><input class="input" value=${f.username} onInput=${(e) => set({ username: e.target.value.trim() })} autocapitalize="off" /><//>
       <${Field} label="Nama lengkap"><input class="input" value=${f.nama} onInput=${(e) => set({ nama: e.target.value })} required /><//>
       <${Field} label="Password" hint=${awal.id ? 'kosong = tidak diubah' : 'kosong = 123456'}><input class="input" type="text" value=${f.password} onInput=${(e) => set({ password: e.target.value })} autocomplete="new-password" /><//>
-      ${!npsn && peran !== 'supervisor' && html`<${Field} label="Sekolah"><select class="select" value=${f.npsn || ''} onChange=${(e) => set({ npsn: e.target.value })}>
+      ${!npsn && html`<${Field} label="Sekolah"><select class="select" value=${f.npsn || ''} onChange=${(e) => set({ npsn: e.target.value })}>
         ${peran === 'guru' && html`<option value="">Pusat (guru penulis)</option>`}${peran !== 'guru' && html`<option value="">— pilih sekolah —</option>`}${sekolah.map((s) => html`<option value=${s.npsn}>${s.nama}</option>`)}</select><//>`}
       ${peran === 'siswa' && html`
         <${Field} label="Jenis kelamin"><select class="select" value=${f.jk || ''} onChange=${(e) => set({ jk: e.target.value })} required><option value="">— pilih —</option><option value="L">Laki-laki</option><option value="P">Perempuan</option></select><//>

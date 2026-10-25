@@ -48,11 +48,11 @@ function Beranda() {
       ${session.user.bisa_monitor ? html`<a href="#/guru/monitor" class="card pad row" style="text-decoration:none;color:inherit"><span class="tile lg t-green"><${Icon} n="monitor" s=${26} /></span>
         <span class="col grow" style="gap:2px"><strong style="font-size:18px">${fmt.bulat(d.mengerjakan || 0)} siswa sedang ujian</strong><span class="small muted">Monitor dan reset login</span></span><${Icon} n="chev-r" /></a>` : ''}
     </section>
-    ${(s.draf || 0) + (s.revisi || 0) > 0 && html`<div class="card row" style="padding:16px;background:var(--sky-50)"><${Icon} n="send" /><span class="grow small">${(s.draf || 0) + (s.revisi || 0)} soal belum diajukan ke supervisor. Soal hanya dipakai ujian setelah disetujui.</span>
+    ${(s.draf || 0) + (s.revisi || 0) > 0 && html`<div class="card row" style="padding:16px;background:var(--sky-50)"><${Icon} n="send" /><span class="grow small">${(s.draf || 0) + (s.revisi || 0)} soal belum diajukan untuk ditelaah. Soal hanya dipakai ujian setelah disetujui.</span>
       <a class="btn btn-p btn-sm" href="#/guru/soal">Buka Bank Soal</a></div>`}`;
 }
 
-function Feedback() {
+export function Feedback() {
   const { data, error, loading, reload } = useAsync(() => get('feedback'), []);
   const baca = async (f) => { try { await put(`feedback/${f.id}/baca`); reload(true); } catch (e) { toastErr(e); } };
   return html`<${PageHead} title="Feedback Soal" sub="Laporan siswa saat mengerjakan ujian" />

@@ -66,7 +66,7 @@ export function DasborWilayah({ base = '#/pusat' }) {
   const semua = useMemo(() => ringkas(rows.map((r) => r.nilai), target), [rows, target]);
 
   // turun satu tingkat saat kelompok/wilayah diklik; sekolah → profil 360
-  const bisaProfil = base === '#/pusat' || base === '#/supervisor';
+  const bisaProfil = base === '#/pusat';
   const telusuri = (g) => {
     const r = g.contoh;
     if (grup === 'provinsi') set({ provinsi: r.provinsi_kode || '', kabkota: '', kecamatan: '', kelurahan: '', grup: '' });
